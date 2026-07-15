@@ -10,9 +10,11 @@ abstraction, [`@ai-sdk/amazon-bedrock`](https://www.npmjs.com/package/@ai-sdk/am
 (primary) and [`@ai-sdk/openai`](https://www.npmjs.com/package/@ai-sdk/openai) (failover) as
 providers, and [Hono](https://hono.dev) for the HTTP layer.
 
-> **Status:** Day 1 — skeleton + routing. Unified `POST /v1/chat` endpoint routes to both
-> providers behind one interface, verified by an integration test that runs without live keys.
-> Policies (rate limit, retry/failover, cache) and streaming land next.
+> **Status:** Day 2 — policies. Unified `POST /v1/chat` routes to both providers behind one
+> interface, now wrapped in three production policies: per-key **rate limiting**, **retry with
+> exponential backoff + cross-provider failover**, and an **LRU response cache**. Each is unit
+> tested, plus HTTP-level integration tests, all running without live keys. Streaming,
+> benchmarks, and deploy land next.
 
 ## Why this exists
 
@@ -50,9 +52,13 @@ Non-streaming chat completion.
   "provider": "bedrock",
   "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
   "text": "Hello! ...",
-  "usage": { "inputTokens": 7, "outputTokens": 11 }
+  "usage": { "inputTokens": 7, "outputTokens": 11 },
+  "cached": false          // true when served from the response cache
 }
 ```
+
+`provider`/`model` reflect who *actually* served the response, so after a failover they name the
+secondary. A `429` (with a `Retry-After` header) means the caller's rate-limit bucket is empty.
 
 ### `GET /health`
 
@@ -61,17 +67,40 @@ Liveness check → `{ "ok": true }`.
 ## Architecture
 
 ```
-POST /v1/chat ─▶ server.ts (Hono + zod validation)
-                     │
-                     ▼
-                 gateway.ts ── route ─▶ providers/{bedrock,openai}.ts ─▶ AI SDK generateText
-                     │
-                     └── (Day 2) policies: rateLimit · retry+failover · cache
+POST /v1/chat
+     │
+     ▼
+ server.ts ── rate limit (429) ── zod validation (400)
+     │
+     ▼
+ gateway.ts ── cache lookup ──hit──▶ return (no provider call)
+     │  miss
+     ▼
+ retry + backoff ──exhausted──▶ failover to next provider
+     │
+     ▼
+ providers/{bedrock,openai}.ts ─▶ AI SDK generateText ─▶ cache store
 ```
 
 Providers hide behind a single `Provider` interface (`src/providers/index.ts`), so the gateway
 never imports a concrete SDK. That seam is what makes routing, failover, and keyless testing
 possible — tests inject a mock registry.
+
+## Policies
+
+Each policy is a standalone, unit-tested module in `src/policies/`, composed by the gateway in
+the order above. All use injectable clocks / sleep so behavior is tested deterministically.
+
+- **`rateLimit.ts`** — token bucket per API key (`x-api-key`, else bearer token, else
+  `anonymous`). Configurable capacity (burst) and refill rate; returns `429` + `Retry-After`
+  when a bucket is empty.
+- **`retry.ts`** — exponential backoff (`base · 2^n`, capped) per provider, then failover to the
+  next provider in the chain. A provider only joins the chain if it has a fallback model
+  configured, since model ids are provider-specific.
+- **`cache.ts`** — LRU cache (optional TTL) keyed on a SHA-256 of the request identity
+  (resolved provider + model + messages + params). A hit returns without any provider call.
+
+Tuned via env vars — see `.env.example`.
 
 ## Develop
 
@@ -85,7 +114,8 @@ npm run dev
 
 ## Benchmarks
 
-Real measured numbers land once the cache and failover paths exist.
+The cache and failover paths now exist; real measured numbers land in Day 3 alongside the
+streaming work and a small bench harness.
 
 - Cache hit vs. miss (p50 / p99): `TODO(metric)`
 - Demonstrated Bedrock → OpenAI failover: `TODO(metric)`
