@@ -10,6 +10,7 @@ import { loadConfig, type SecurityConfig } from './config.js';
 import { RateLimiter } from './policies/rateLimit.js';
 import { ResponseCache } from './policies/cache.js';
 import { authorize } from './policies/auth.js';
+import { Metrics } from './metrics.js';
 
 /** Build the request schema with config-driven size caps (message count / content length). */
 function buildChatRequestSchema(security: SecurityConfig) {
@@ -34,6 +35,7 @@ function buildChatRequestSchema(security: SecurityConfig) {
 export interface ServerOverrides extends Partial<GatewayDeps> {
   rateLimiter?: RateLimiter;
   security?: SecurityConfig;
+  metrics?: Metrics;
 }
 
 /** The API key presented by the caller, if any (explicit header preferred over bearer token). */
@@ -73,15 +75,21 @@ export function createServer(overrides?: ServerOverrides): Hono {
     fallbackModels: overrides?.fallbackModels ?? config.fallbackModels,
   };
   const rateLimiter = overrides?.rateLimiter ?? new RateLimiter(config.rateLimit);
+  const metrics = overrides?.metrics ?? new Metrics();
+  const primaryOf = (provider?: string) => provider ?? deps.defaultProvider;
 
   const app = new Hono();
 
   app.get('/health', (c) => c.json({ ok: true }));
 
+  // Live counters for the dashboard (per-instance; see README "Design decisions").
+  app.get('/stats', (c) => c.json(metrics.snapshot()));
+
   app.post('/v1/chat', async (c) => {
     // 1. Reject oversized bodies up front (cheap, before reading/parsing).
     const contentLength = Number(c.req.header('content-length'));
     if (Number.isFinite(contentLength) && contentLength > security.maxBodyBytes) {
+      metrics.reject('payload_too_large');
       return c.json({ error: 'payload_too_large', maxBodyBytes: security.maxBodyBytes }, 413);
     }
 
@@ -93,12 +101,14 @@ export function createServer(overrides?: ServerOverrides): Hono {
     const bucket = auth.keyed ? `key:${key}` : `ip:${clientIp(c)}`;
     const limit = rateLimiter.check(bucket);
     if (!limit.allowed) {
+      metrics.reject('rate_limited');
       c.header('Retry-After', String(Math.ceil(limit.retryAfterMs / 1000)));
       return c.json({ error: 'rate_limited', retryAfterMs: limit.retryAfterMs }, 429);
     }
 
     // 3. Authentication (enforced only when an allowlist is configured).
     if (!auth.authorized) {
+      metrics.reject('unauthorized');
       c.header('WWW-Authenticate', 'Bearer');
       return c.json({ error: 'unauthorized' }, 401);
     }
@@ -106,11 +116,13 @@ export function createServer(overrides?: ServerOverrides): Hono {
     // 4. Validate shape + size caps.
     const parsed = chatRequestSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) {
+      metrics.reject('invalid_request');
       return c.json({ error: 'invalid_request', issues: parsed.error.issues }, 400);
     }
 
     // 5. Restrict which models may be requested (when an allowlist is configured).
     if (security.allowedModels.size > 0 && !security.allowedModels.has(parsed.data.model)) {
+      metrics.reject('model_not_allowed');
       return c.json({ error: 'model_not_allowed', model: parsed.data.model }, 400);
     }
 
@@ -120,6 +132,7 @@ export function createServer(overrides?: ServerOverrides): Hono {
     // `messages` is validated to plain-text turns above; the cast bridges the
     // narrowed literal shape to the SDK's broader ModelMessage union.
     const chatReq = { ...parsed.data, maxTokens, messages: parsed.data.messages as ModelMessage[] };
+    const primary = primaryOf(parsed.data.provider);
 
     if (parsed.data.stream) {
       return streamSSE(c, async (sse) => {
@@ -128,17 +141,44 @@ export function createServer(overrides?: ServerOverrides): Hono {
         const controller = new AbortController();
         sse.onAbort(() => controller.abort());
 
+        const start = performance.now();
         for await (const event of streamChat(chatReq, deps, controller.signal)) {
           await sse.writeSSE({ event: event.type, data: JSON.stringify(event) });
-          if (event.type === 'done' || event.type === 'error') break;
+          if (event.type === 'done') {
+            metrics.success({
+              provider: event.provider,
+              cached: event.cached,
+              failedOver: false, // streaming serves the primary provider only
+              // A cache hit makes no provider call, so it consumes no latency or tokens.
+              latencyMs: event.cached ? undefined : performance.now() - start,
+              inputTokens: event.cached ? undefined : event.usage.inputTokens,
+              outputTokens: event.cached ? undefined : event.usage.outputTokens,
+            });
+            break;
+          }
+          if (event.type === 'error') {
+            metrics.error();
+            break;
+          }
         }
       });
     }
 
     try {
+      const start = performance.now();
       const result = await handleChat(chatReq, deps);
+      metrics.success({
+        provider: result.provider,
+        cached: result.cached,
+        failedOver: result.provider !== primary,
+        // A cache hit makes no provider call, so it consumes no latency or tokens.
+        latencyMs: result.cached ? undefined : performance.now() - start,
+        inputTokens: result.cached ? undefined : result.usage.inputTokens,
+        outputTokens: result.cached ? undefined : result.usage.outputTokens,
+      });
       return c.json(result);
     } catch (err) {
+      metrics.error();
       if (err instanceof UnknownProviderError) {
         return c.json({ error: 'unknown_provider', provider: err.provider }, 400);
       }

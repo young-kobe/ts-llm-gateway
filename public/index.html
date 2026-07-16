@@ -48,6 +48,15 @@
       th { color: var(--muted); font-weight: 600; }
       a { color: var(--accent); }
       footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
+      .stats-head { display: flex; align-items: center; gap: 8px; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; transition: background 0.2s; }
+      .dot.live { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 25%, transparent); }
+      .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; }
+      .tile { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 14px 16px; }
+      .tile .num { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+      .tile .num .unit { font-size: 13px; color: var(--muted); font-weight: 400; margin-left: 1px; }
+      .tile .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 4px; }
+      .stats-note { color: var(--muted); font-size: 12px; margin-top: 10px; }
     </style>
   </head>
   <body>
@@ -69,7 +78,28 @@
           <span class="method">POST</span> <span class="path">/v1/chat</span>
           <small>Chat completion. Add <code>"stream": true</code> for an SSE token stream.</small>
         </li>
+        <li>
+          <span class="method">GET</span> <span class="path">/stats</span>
+          <small>Live counters (JSON) powering the dashboard below.</small>
+        </li>
       </ul>
+
+      <h2 class="stats-head">Live stats <span id="dot" class="dot" title="polling /stats"></span></h2>
+      <div class="stats-grid">
+        <div class="tile"><div class="num" id="s-requests">0</div><div class="label">Requests</div></div>
+        <div class="tile"><div class="num" id="s-success">0</div><div class="label">Success</div></div>
+        <div class="tile"><div class="num" id="s-hitrate">0<span class="unit">%</span></div><div class="label">Cache hit rate</div></div>
+        <div class="tile"><div class="num" id="s-p50">0<span class="unit">ms</span></div><div class="label">p50 latency</div></div>
+        <div class="tile"><div class="num" id="s-p99">0<span class="unit">ms</span></div><div class="label">p99 latency</div></div>
+        <div class="tile"><div class="num" id="s-failovers">0</div><div class="label">Failovers</div></div>
+        <div class="tile"><div class="num" id="s-rejected">0</div><div class="label">Rejected</div></div>
+        <div class="tile"><div class="num" id="s-tokens">0 / 0</div><div class="label">Tokens in / out</div></div>
+      </div>
+      <p class="stats-note">
+        Live from <code>/stats</code>, polled every 2s. Counters are per serverless instance and
+        reset on cold start, so on Vercel you may be viewing a different instance than the one
+        serving traffic.
+      </p>
 
       <h2>Example</h2>
       <pre>curl -s https://ts-llm-gateway.vercel.app/v1/chat \
@@ -92,5 +122,29 @@
 
       <footer>Built on the Vercel AI SDK + Hono, deployed as a Vercel Function.</footer>
     </main>
+    <script>
+      const el = (id) => document.getElementById(id);
+      const fmt = (n) => (n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n));
+      async function poll() {
+        try {
+          const r = await fetch('/stats', { cache: 'no-store' });
+          if (!r.ok) throw new Error(String(r.status));
+          const s = await r.json();
+          el('s-requests').textContent = fmt(s.requests);
+          el('s-success').textContent = fmt(s.success);
+          el('s-hitrate').innerHTML = Math.round(s.cache.hitRate * 100) + '<span class="unit">%</span>';
+          el('s-p50').innerHTML = s.latencyMs.p50 + '<span class="unit">ms</span>';
+          el('s-p99').innerHTML = s.latencyMs.p99 + '<span class="unit">ms</span>';
+          el('s-failovers').textContent = fmt(s.failovers);
+          el('s-rejected').textContent = fmt(Object.values(s.rejected).reduce((a, b) => a + b, 0));
+          el('s-tokens').textContent = fmt(s.tokens.input) + ' / ' + fmt(s.tokens.output);
+          el('dot').classList.add('live');
+        } catch {
+          el('dot').classList.remove('live');
+        }
+      }
+      poll();
+      setInterval(poll, 2000);
+    </script>
   </body>
 </html>

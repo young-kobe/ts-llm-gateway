@@ -17,9 +17,10 @@ providers, and [Hono](https://hono.dev) for the HTTP layer.
 > **Status:** feature-complete. Unified `POST /v1/chat` routes to both providers behind one
 > interface, wrapped in three production policies (per-key **rate limiting**, **retry with
 > exponential backoff + cross-provider failover**, and an **LRU response cache**), plus **SSE
-> token streaming with client-driven cancellation**, and abuse guards (API-key auth, IP-based
-> rate limiting, request caps). 37 tests (unit + HTTP integration) run without live keys; a
-> benchmark harness measures the cache and failover paths. Deploy config for Vercel is included.
+> token streaming with client-driven cancellation**, abuse guards (API-key auth, IP-based
+> rate limiting, request caps), and a **live stats dashboard** (`/stats`). 41 tests (unit + HTTP
+> integration) run without live keys; a benchmark harness measures the cache and failover paths.
+> Deploy config for Vercel is included.
 
 ## Why this exists
 
@@ -91,6 +92,13 @@ provider; retry/failover apply to the non-streaming path.)
 ### `GET /health`
 
 Liveness check → `{ "ok": true }`.
+
+### `GET /stats`
+
+Live counters powering the dashboard on the landing page: request/success/error totals,
+per-reason rejections, cache hit rate, failovers, per-provider served counts, token totals, and
+provider-call latency p50/p99. Counters are per-instance (see
+[Design decisions](#design-decisions--trade-offs)).
 
 ## Architecture
 
@@ -216,8 +224,11 @@ npm install
 npm test          # runs the integration suite with mock providers (no keys needed)
 npm run typecheck
 cp .env.example .env   # fill in AWS + OpenAI creds to run against live providers
-npm run dev
+npm run dev            # serves the API + landing page/dashboard at http://localhost:8787
 ```
+
+`npm run dev` also serves `public/` (landing page + live dashboard) so the full experience is
+viewable locally; in production Vercel serves those static files itself.
 
 ## Benchmarks
 
