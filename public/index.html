@@ -76,7 +76,11 @@
         </li>
         <li>
           <span class="method">POST</span> <span class="path">/v1/chat</span>
-          <small>Chat completion. Add <code>"stream": true</code> for an SSE token stream.</small>
+          <small>Native chat completion. Add <code>"stream": true</code> for an SSE token stream.</small>
+        </li>
+        <li>
+          <span class="method">POST</span> <span class="path">/v1/chat/completions</span>
+          <small>OpenAI-compatible. Point the OpenAI SDK here; route with a <code>provider/model</code> id.</small>
         </li>
         <li>
           <span class="method">GET</span> <span class="path">/stats</span>
@@ -106,6 +110,14 @@
   -H 'content-type: application/json' \
   -d '{
     "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "messages": [{ "role": "user", "content": "Hello" }]
+  }'
+
+# OpenAI-compatible: same call, OpenAI wire format, provider/model routing
+curl -s https://ts-llm-gateway.vercel.app/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "openai/gpt-4o-mini",
     "messages": [{ "role": "user", "content": "Hello" }]
   }'</pre>
 
