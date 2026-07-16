@@ -3,6 +3,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 import { createServer } from '../src/server.js';
 import { RateLimiter } from '../src/policies/rateLimit.js';
+import { CircuitBreaker } from '../src/policies/circuitBreaker.js';
 import type { Provider, ProviderRegistry } from '../src/providers/index.js';
 import type { ProviderName } from '../src/types.js';
 
@@ -25,9 +26,10 @@ function passingModel(text: string, counter?: { calls: number }): LanguageModelV
 }
 
 /** A mock model that always throws, standing in for a downed provider. */
-function throwingModel(): LanguageModelV3 {
+function throwingModel(counter?: { calls: number }): LanguageModelV3 {
   return new MockLanguageModelV3({
     doGenerate: async () => {
+      if (counter) counter.calls++;
       throw new Error('primary provider down');
     },
   });
@@ -205,5 +207,92 @@ describe('POST /v1/chat', () => {
     expect(second.headers.get('Retry-After')).toBe('1');
     const body = await second.json() as any;
     expect(body.error).toBe('rate_limited');
+  });
+});
+
+describe('POST /v1/chat circuit breaker', () => {
+  // Distinct message per request so the response cache never masks breaker behavior.
+  const uniqueChat = (n: number) =>
+    post({ model: 'anthropic.claude-3-5-sonnet', messages: [{ role: 'user', content: `hi ${n}` }] });
+
+  const fastRetry = { maxAttempts: 1, baseDelayMs: 0, maxDelayMs: 0, sleep: async () => {} };
+
+  it('opens a failing provider and skips it, failing fast to the secondary', async () => {
+    const primaryCalls = { calls: 0 };
+    const app = createServer({
+      providers: registryOf(throwingModel(primaryCalls), passingModel('served by openai')),
+      defaultProvider: 'bedrock',
+      fallbackModels: { openai: 'gpt-4o-mini' },
+      retry: fastRetry,
+      breaker: new CircuitBreaker({ failureThreshold: 1, cooldownMs: 60_000 }),
+    });
+
+    const first = await app.request('/v1/chat', uniqueChat(1));
+    expect(first.status).toBe(200);
+    expect((await first.json() as any).provider).toBe('openai');
+    expect(primaryCalls.calls).toBe(1); // primary attempted once, then its circuit opened
+
+    const second = await app.request('/v1/chat', uniqueChat(2));
+    expect(second.status).toBe(200);
+    expect((await second.json() as any).provider).toBe('openai');
+    expect(primaryCalls.calls).toBe(1); // primary skipped entirely: not called again
+  });
+
+  it('returns 503 once every provider circuit is open, without calling them', async () => {
+    const bedrockCalls = { calls: 0 };
+    const openaiCalls = { calls: 0 };
+    const app = createServer({
+      providers: registryOf(throwingModel(bedrockCalls), throwingModel(openaiCalls)),
+      defaultProvider: 'bedrock',
+      fallbackModels: { openai: 'gpt-4o-mini' },
+      retry: fastRetry,
+      breaker: new CircuitBreaker({ failureThreshold: 1, cooldownMs: 60_000 }),
+    });
+
+    const first = await app.request('/v1/chat', uniqueChat(1));
+    expect(first.status).toBe(502); // both fail on the first request
+    const callsAfterFirst = bedrockCalls.calls + openaiCalls.calls;
+    expect(callsAfterFirst).toBeGreaterThan(0);
+
+    const second = await app.request('/v1/chat', uniqueChat(2));
+    expect(second.status).toBe(503);
+    expect((await second.json() as any).error).toBe('circuit_open');
+    expect(bedrockCalls.calls + openaiCalls.calls).toBe(callsAfterFirst); // no provider called
+  });
+
+  it('probes and closes the circuit after the cooldown when the provider recovers', async () => {
+    const clock = { t: 0 };
+    const healthy = { ok: false };
+    const primary = new MockLanguageModelV3({
+      doGenerate: async () => {
+        if (!healthy.ok) throw new Error('primary down');
+        return {
+          finishReason: { unified: 'stop' as const, raw: 'stop' },
+          usage: {
+            inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 1, text: 1, reasoning: undefined },
+          },
+          content: [{ type: 'text' as const, text: 'primary recovered' }],
+          warnings: [],
+        };
+      },
+    });
+    const app = createServer({
+      providers: registryOf(primary, passingModel('served by openai')),
+      defaultProvider: 'bedrock',
+      fallbackModels: { openai: 'gpt-4o-mini' },
+      retry: fastRetry,
+      breaker: new CircuitBreaker({ failureThreshold: 1, cooldownMs: 1000, now: () => clock.t }),
+    });
+
+    // Trip the primary open, then confirm it's skipped within the cooldown.
+    expect((await (await app.request('/v1/chat', uniqueChat(1))).json() as any).provider).toBe('openai');
+    expect((await (await app.request('/v1/chat', uniqueChat(2))).json() as any).provider).toBe('openai');
+
+    // Backend recovers; advance past the cooldown so the next request half-open probes it.
+    healthy.ok = true;
+    clock.t = 1000;
+    const recovered = await app.request('/v1/chat', uniqueChat(3));
+    expect((await recovered.json() as any).provider).toBe('bedrock'); // probe succeeded, circuit closed
   });
 });

@@ -4,6 +4,7 @@ import { buildDefaultRegistry } from './providers/index.js';
 import { RateLimiter, RedisRateLimiter, type Limiter } from './policies/rateLimit.js';
 import { ResponseCache } from './policies/cache.js';
 import { Metrics, RedisMetrics, type MetricsSink } from './metrics.js';
+import { CircuitBreaker } from './policies/circuitBreaker.js';
 import { createRedis, createRatelimit } from './store/redis.js';
 import type { ApiContext } from './surfaces/pipeline.js';
 
@@ -31,6 +32,9 @@ export function buildRuntime(config: Config, overrides?: ServerOverrides): ApiCo
     cache: overrides?.cache ?? new ResponseCache(config.cache, redis),
     fallbackModels: overrides?.fallbackModels ?? config.fallbackModels,
     timeoutMs: overrides?.timeoutMs ?? config.providerTimeoutMs,
+    // Per-instance by design (see CircuitBreaker); each instance quarantines and
+    // probes providers independently rather than sharing state via Redis.
+    breaker: overrides?.breaker ?? new CircuitBreaker(config.circuitBreaker),
   };
 
   const rateLimiter =
