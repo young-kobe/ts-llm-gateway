@@ -12,6 +12,8 @@ export interface Config {
     baseDelayMs: number;
     maxDelayMs: number;
   };
+  /** Per-provider-call deadline in ms; keep below the serverless function's max duration. */
+  providerTimeoutMs: number;
   cache: {
     maxEntries: number;
     /** undefined → entries never expire. */
@@ -69,6 +71,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       baseDelayMs: num(env.RETRY_BASE_DELAY_MS, 200),
       maxDelayMs: num(env.RETRY_MAX_DELAY_MS, 2000),
     },
+    providerTimeoutMs: num(env.PROVIDER_TIMEOUT_MS, 20_000),
     cache: {
       maxEntries: num(env.CACHE_MAX_ENTRIES, 500),
       ttlMs: env.CACHE_TTL_MS ? num(env.CACHE_TTL_MS, 60_000) : undefined,

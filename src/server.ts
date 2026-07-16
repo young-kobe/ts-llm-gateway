@@ -79,6 +79,7 @@ export function createServer(overrides?: ServerOverrides): Hono {
     retry: overrides?.retry ?? { ...config.retry },
     cache: overrides?.cache ?? new ResponseCache(config.cache, redis),
     fallbackModels: overrides?.fallbackModels ?? config.fallbackModels,
+    timeoutMs: overrides?.timeoutMs ?? config.providerTimeoutMs,
   };
   const rateLimiter =
     overrides?.rateLimiter ??
