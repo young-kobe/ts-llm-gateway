@@ -80,4 +80,23 @@ describe('RedisRateLimiter (distributed adapter)', () => {
     // reset (6000) - now (5500) = 500ms until the bucket refills.
     expect(denied).toEqual({ allowed: false, remaining: 0, retryAfterMs: 500 });
   });
+
+  it('fails OPEN (allows) when the shared limiter hangs, instead of blocking the request', async () => {
+    // A limiter that never resolves, standing in for an unreachable/slow Redis.
+    const hanging: DistributedLimiter = { limit: () => new Promise(() => {}) };
+    const limiter = new RedisRateLimiter(hanging, () => 0, 20); // 20ms deadline
+
+    const result = await limiter.check('k');
+    expect(result.allowed).toBe(true); // degraded to allow, did not hang
+  });
+
+  it('fails OPEN (allows) when the shared limiter throws', async () => {
+    const throwing: DistributedLimiter = {
+      limit: async () => {
+        throw new Error('redis unreachable');
+      },
+    };
+    const limiter = new RedisRateLimiter(throwing, () => 0, 20);
+    expect((await limiter.check('k')).allowed).toBe(true);
+  });
 });

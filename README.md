@@ -22,7 +22,7 @@ providers, and [Hono](https://hono.dev) for the HTTP layer.
 > cache**), plus **SSE token streaming with client-driven cancellation**, abuse guards
 > (API-key auth, IP-based rate limiting, request caps), and a **live stats dashboard** (`/stats`).
 > State (cache, rate limiter, metrics) runs behind a **pluggable backend**: in-memory by default,
-> or global + durable via Upstash Redis when configured. 77 tests (unit + HTTP integration) run
+> or global + durable via Upstash Redis when configured. 81 tests (unit + HTTP integration) run
 > without live keys; a benchmark harness measures the cache and failover paths. Deploy config for
 > Vercel is included.
 
@@ -242,6 +242,11 @@ integration injects both) and all three become
 **global and durable across serverless instances** (a distributed token bucket, a shared response
 cache, and shared counters). Unset, they fall back to **in-process, per-instance** state that
 resets on cold start. The gateway degrades gracefully either way; nothing else changes.
+
+The request-path Redis calls are also bounded and **fail soft**: a slow or unreachable store can
+never hang a request. Each op has a short deadline, after which the rate limiter **fails open**
+(admits the request) and the cache degrades to a **miss**, so a Redis outage costs latency and
+enforcement, not availability. Metric writes are fire-and-forget for the same reason.
 
 Regardless of backend, set the two provider-side backstops so abuse can't run up an unbounded bill:
 

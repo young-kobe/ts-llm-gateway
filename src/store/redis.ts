@@ -21,6 +21,28 @@ export interface DistributedLimiter {
   limit(identifier: string): Promise<{ success: boolean; remaining: number; reset: number }>;
 }
 
+/** Default ceiling for a single best-effort store op in the request path. */
+export const STORE_OP_TIMEOUT_MS = 2000;
+
+/**
+ * Bound a best-effort store operation: resolve to `fallback` if it does not settle
+ * within `ms` or if it rejects. This is what makes the shared backends degrade
+ * gracefully instead of hanging a request for the whole function duration when
+ * Redis is slow or unreachable (fail open for the limiter, cache miss for reads).
+ * The underlying op may still settle later; its result/rejection is discarded.
+ */
+export async function withDeadline<T>(op: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+  });
+  try {
+    return await Promise.race([op.catch(() => fallback), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
  * The real Redis client if REST credentials are configured, else undefined
  * (in-memory fallback). Uses the `KV_*` names injected by the Vercel Marketplace
