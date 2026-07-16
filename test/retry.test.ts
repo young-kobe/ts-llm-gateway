@@ -77,6 +77,28 @@ describe('withRetryAndFailover', () => {
     expect(sleeps).toEqual([100]);
   });
 
+  it('spreads backoff into [delay/2, delay] when jitter is enabled', async () => {
+    // random()=0 -> the low end (delay/2); random()=~1 -> the full delay. The base
+    // delays grow 100, 200, so with these randoms the jittered waits land at 50 and ~200.
+    const randoms = [0, 0.999];
+    let i = 0;
+    const { options, sleeps } = opts({ maxAttempts: 3, jitter: true, random: () => randoms[i++] ?? 0 });
+
+    await expect(
+      withRetryAndFailover(['A'], async () => { throw new Error('down'); }, options),
+    ).rejects.toThrow('down');
+
+    expect(sleeps).toEqual([50, 200]); // half of base 100, then ~all of base 200 (rounded)
+  });
+
+  it('leaves the schedule deterministic when jitter is off (default)', async () => {
+    const { options, sleeps } = opts({ maxAttempts: 3 });
+    await expect(
+      withRetryAndFailover(['A'], async () => { throw new Error('down'); }, options),
+    ).rejects.toThrow('down');
+    expect(sleeps).toEqual([100, 200]); // exact powers, no randomness
+  });
+
   it('does not retry a non-retryable error, fails over straight away', async () => {
     const { options, sleeps } = opts({ maxAttempts: 3, isRetryable: () => false });
     const seen: string[] = [];

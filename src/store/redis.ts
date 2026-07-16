@@ -14,6 +14,20 @@ export interface RedisLike {
   lpush(key: string, ...values: (string | number)[]): Promise<number>;
   ltrim(key: string, start: number, stop: number): Promise<unknown>;
   lrange(key: string, start: number, stop: number): Promise<string[]>;
+  /** Batch several writes into ONE round-trip (Upstash `pipeline`). See RedisPipeline. */
+  pipeline(): RedisPipeline;
+}
+
+/**
+ * The subset of Upstash's chainable `Pipeline` our metrics use: queue commands, then
+ * `exec()` sends them all in a single HTTP request. Batching the ~9 per-request
+ * counter writes into one call cuts request volume (and Upstash quota) roughly 9x.
+ */
+export interface RedisPipeline {
+  hincrby(key: string, field: string, increment: number): RedisPipeline;
+  lpush(key: string, ...values: (string | number)[]): RedisPipeline;
+  ltrim(key: string, start: number, stop: number): RedisPipeline;
+  exec(): Promise<unknown[]>;
 }
 
 /** Minimal shape of an Upstash Ratelimit instance, for the same test-fakeability reason. */
