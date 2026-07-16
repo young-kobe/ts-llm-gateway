@@ -13,9 +13,9 @@ providers, and [Hono](https://hono.dev) for the HTTP layer.
 > **Status:** feature-complete. Unified `POST /v1/chat` routes to both providers behind one
 > interface, wrapped in three production policies — per-key **rate limiting**, **retry with
 > exponential backoff + cross-provider failover**, and an **LRU response cache** — plus **SSE
-> token streaming with client-driven cancellation**. 26 tests (unit + HTTP integration) run
-> without live keys; a benchmark harness measures the cache and failover paths. Deploy config
-> for Vercel is included.
+> token streaming with client-driven cancellation**, and abuse guards (API-key auth, IP-based
+> rate limiting, request caps). 37 tests (unit + HTTP integration) run without live keys; a
+> benchmark harness measures the cache and failover paths. Deploy config for Vercel is included.
 
 ## Why this exists
 
@@ -115,9 +115,9 @@ possible — tests inject a mock registry.
 Each policy is a standalone, unit-tested module in `src/policies/`, composed by the gateway in
 the order above. All use injectable clocks / sleep so behavior is tested deterministically.
 
-- **`rateLimit.ts`** — token bucket per API key (`x-api-key`, else bearer token, else
-  `anonymous`). Configurable capacity (burst) and refill rate; returns `429` + `Retry-After`
-  when a bucket is empty.
+- **`rateLimit.ts`** — token bucket, one per caller (see [Abuse prevention](#abuse-prevention)
+  for how the bucket key is chosen). Configurable capacity (burst) and refill rate; returns
+  `429` + `Retry-After` when a bucket is empty.
 - **`retry.ts`** — exponential backoff (`base · 2^n`, capped) per provider, then failover to the
   next provider in the chain. A provider only joins the chain if it has a fallback model
   configured, since model ids are provider-specific.
@@ -125,6 +125,30 @@ the order above. All use injectable clocks / sleep so behavior is tested determi
   (resolved provider + model + messages + params). A hit returns without any provider call.
 
 Tuned via env vars — see `.env.example`.
+
+## Abuse prevention
+
+A public endpoint that spends money per call needs guarding. In-code (`src/server.ts`,
+`src/policies/auth.ts`), the gateway does, in order:
+
+1. **Body-size guard** — rejects oversized payloads (`413`) by `Content-Length` before parsing.
+2. **Rate limiting** — buckets *authorized* callers by their validated key and everyone else by
+   **client IP** (`x-forwarded-for`). It deliberately never buckets by the raw caller-supplied
+   key, so an attacker can't rotate `x-api-key` to mint a fresh bucket per request.
+3. **Auth gate** — when `GATEWAY_API_KEYS` is set, callers must present an allowlisted key
+   (`x-api-key` or `Bearer`) or get `401`. Unset = open (local dev only).
+4. **Request caps** — clamps `maxTokens` to `MAX_OUTPUT_TOKENS`, caps message count / content
+   length, and optionally restricts models (`ALLOWED_MODELS`). Bounds the cost of any one request.
+
+**Honest limitation on serverless:** the rate limiter and cache are in-memory, so on Vercel their
+state is *per-instance* and resets on cold start — they don't enforce a global ceiling across
+instances. Treat them as best-effort. The durable backstops for a real deployment are:
+
+- **Vercel Firewall / Attack Challenge Mode** — edge-level, cross-instance IP rate limiting.
+- **Provider spend caps** — OpenAI usage limits + AWS Budgets, so abuse can't run up an unbounded
+  bill even if every in-app guard is bypassed. Set these regardless.
+- A shared store (Upstash Redis / Vercel KV) if you want per-key limits and cache hits to hold
+  across instances.
 
 ## Develop
 
