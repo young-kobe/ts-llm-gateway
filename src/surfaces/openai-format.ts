@@ -3,12 +3,16 @@ import { z } from 'zod';
 import type { ModelMessage } from 'ai';
 import type { SecurityConfig } from '../config.js';
 import type { ChatRequest, ChatResponse, ProviderName } from '../types.js';
+import { messageSchema } from './pipeline.js';
 
 /**
- * OpenAI-compatible surface. This module is pure translation: OpenAI wire format
- * in, internal ChatRequest out, and internal ChatResponse in, OpenAI wire format
- * out. It calls no policies itself, so `POST /v1/chat/completions` reuses the same
- * gateway core (cache, retry, failover, timeout, metrics) as the native endpoint.
+ * Pure translation for the OpenAI-compatible surface: OpenAI wire format <->
+ * canonical ChatRequest/ChatResponse. It calls no policies, so the surface route
+ * (openai.ts) can reuse the same gateway core as the native surface.
+ *
+ * NB: "OpenAI" here is the inbound wire FORMAT (the dialect the OpenAI SDK speaks),
+ * not the `openai` PROVIDER in providers/. A request in this format can route to
+ * Bedrock via a `bedrock/<model>` id.
  */
 
 const PROVIDERS = new Set<ProviderName>(['bedrock', 'openai']);
@@ -42,16 +46,11 @@ export interface OpenAIChatRequest {
   stream?: boolean;
 }
 
-/** Build the request schema with the same config-driven caps as the native endpoint. */
+/** Build the request schema with the same config-driven caps as the native surface. */
 export function buildOpenAIRequestSchema(security: SecurityConfig) {
-  const messageSchema = z.object({
-    role: z.enum(['system', 'user', 'assistant']),
-    content: z.string().min(1).max(security.maxContentChars),
-  });
-
   return z.object({
     model: z.string().min(1),
-    messages: z.array(messageSchema).min(1).max(security.maxMessages),
+    messages: z.array(messageSchema(security)).min(1).max(security.maxMessages),
     temperature: z.number().min(0).max(2).optional(),
     max_tokens: z.number().int().positive().optional(),
     max_completion_tokens: z.number().int().positive().optional(),
@@ -59,7 +58,7 @@ export function buildOpenAIRequestSchema(security: SecurityConfig) {
   });
 }
 
-/** Translate a validated OpenAI request into the internal ChatRequest. */
+/** Translate a validated OpenAI request into the canonical ChatRequest. */
 export function toChatRequest(body: OpenAIChatRequest): ChatRequest {
   const route = parseModelRoute(body.model);
   return {
@@ -83,7 +82,7 @@ export function newCompletionMeta(): CompletionMeta {
 }
 
 /**
- * Translate the internal result into an OpenAI `chat.completion` object. `model`
+ * Translate the canonical result into an OpenAI `chat.completion` object. `model`
  * echoes what the caller requested (including any provider prefix), which is what
  * OpenAI clients expect; the actually-served provider after failover is reflected
  * in the gateway's own /stats, not in this response.

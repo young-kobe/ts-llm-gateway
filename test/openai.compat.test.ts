@@ -6,7 +6,7 @@ import {
   openAIChunk,
   type CompletionMeta,
   type OpenAIChatRequest,
-} from '../src/openai/compat.js';
+} from '../src/surfaces/openai-format.js';
 import type { ChatResponse } from '../src/types.js';
 
 const META: CompletionMeta = { id: 'chatcmpl-test', created: 1_700_000_000 };
