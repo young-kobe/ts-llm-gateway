@@ -13,7 +13,7 @@ export interface GatewayDeps {
   cache?: ResponseCache;
   /**
    * Model to use when failing over TO a given provider. A provider only joins the
-   * failover chain if it has a fallback model here — because a request's model id
+   * failover chain if it has a fallback model here, because a request's model id
    * is provider-specific and won't be valid on a different provider.
    */
   fallbackModels?: Partial<Record<ProviderName, string>>;

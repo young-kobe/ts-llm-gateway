@@ -70,7 +70,7 @@ describe('auth gate', () => {
 });
 
 describe('rate-limit bucketing', () => {
-  it('buckets anonymous callers by IP — rotating x-api-key does NOT grant fresh buckets', async () => {
+  it('buckets anonymous callers by IP: rotating x-api-key does NOT grant fresh buckets', async () => {
     const app = createServer({
       providers: registryOf(passingModel()),
       defaultProvider: 'bedrock',

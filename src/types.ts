@@ -17,7 +17,7 @@ export interface ChatRequest {
 
 /** What the gateway returns for a non-streaming completion. */
 export interface ChatResponse {
-  /** The provider that actually served the response — may differ from the request after failover. */
+  /** The provider that actually served the response. May differ from the request after failover. */
   provider: ProviderName;
   /** The model that actually served the response. */
   model: string;

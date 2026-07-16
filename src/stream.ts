@@ -12,7 +12,7 @@ export type StreamEvent =
 /**
  * Streaming orchestration. Mirrors `handleChat` but yields token deltas as they
  * arrive, and threads `signal` into the upstream call so a client disconnect
- * cancels the provider request — the direct analogue of RTSS shard-consumer
+ * cancels the provider request, the direct analogue of RTSS shard-consumer
  * cancellation tokens tearing down in-flight work.
  *
  * Scope note: streaming serves the primary provider only. Retry/backoff and
@@ -68,7 +68,7 @@ export async function* streamChat(
     if (key && deps.cache) deps.cache.set(key, response);
     yield { type: 'done', provider: primary, model: req.model, cached: false, usage: response.usage };
   } catch (err) {
-    // On abort, `result.usage` may still be pending and reject later — mark it
+    // On abort, `result.usage` may still be pending and reject later, so mark it
     // handled so it can't surface as an unhandled rejection.
     void Promise.resolve(result.usage).catch(() => {});
     // A client-driven abort is expected teardown, not an error to report.

@@ -3,7 +3,7 @@
  *
  * Honesty note: this runs WITHOUT live provider keys, against a mock backend with
  * a fixed injected latency. The numbers are therefore real measurements of the
- * gateway itself — cache-hit vs. cache-miss overhead, and failover behavior — not
+ * gateway itself: cache-hit vs. cache-miss overhead, and failover behavior, not
  * of any real model. Re-run against live Bedrock/OpenAI after deploy to get
  * end-to-end provider latency.
  *
@@ -112,7 +112,7 @@ async function main() {
   const missStats = stats(miss);
   const hitStats = stats(hit);
 
-  console.log(`\nGateway benchmark — simulated ${BACKEND_LATENCY_MS}ms backend, ${ITERATIONS} iterations\n`);
+  console.log(`\nGateway benchmark: simulated ${BACKEND_LATENCY_MS}ms backend, ${ITERATIONS} iterations\n`);
   console.log('                      p50 (ms)    p99 (ms)   mean (ms)');
   console.log(`  cache miss         ${fmt(missStats.p50)}   ${fmt(missStats.p99)}  ${fmt(missStats.mean)}`);
   console.log(`  cache hit          ${fmt(hitStats.p50)}   ${fmt(hitStats.p99)}  ${fmt(hitStats.mean)}`);

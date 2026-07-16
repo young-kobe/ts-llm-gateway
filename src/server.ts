@@ -30,7 +30,7 @@ function buildChatRequestSchema(security: SecurityConfig) {
   });
 }
 
-/** Injectable overrides — tests pass a mock registry, tight limiter, or custom security config. */
+/** Injectable overrides: tests pass a mock registry, tight limiter, or custom security config. */
 export interface ServerOverrides extends Partial<GatewayDeps> {
   rateLimiter?: RateLimiter;
   security?: SecurityConfig;
@@ -57,7 +57,7 @@ function clientIp(c: Context): string {
 
 /**
  * Build the Hono app. Dependencies default to the real registry + config-driven
- * policies, but every piece is injectable — tests pass a mock registry (no keys)
+ * policies, but every piece is injectable: tests pass a mock registry (no keys)
  * and can swap in a tight rate limiter or a custom security config.
  */
 export function createServer(overrides?: ServerOverrides): Hono {
@@ -86,7 +86,7 @@ export function createServer(overrides?: ServerOverrides): Hono {
     }
 
     // 2. Admission control. Bucket authorized callers by their (validated) key, and
-    //    everyone else by client IP — never by the raw, caller-controlled header,
+    //    everyone else by client IP, never by the raw, caller-controlled header,
     //    which an attacker could rotate to get a fresh bucket per request.
     const key = presentedKey(c);
     const auth = authorize(key, security.apiKeys);
