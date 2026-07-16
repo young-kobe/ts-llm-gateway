@@ -3,7 +3,7 @@
  *
  * The RTSS bridge: Kinesis throttling was handled with bounded exponential
  * backoff, and a stuck shard consumer failed over to a healthy one. Here each
- * "step" is a (provider, model) target — the primary is retried up to
+ * "step" is a (provider, model) target; the primary is retried up to
  * `maxAttempts` times with growing delays, and if it stays down the next step
  * (the failover provider) takes over.
  *
@@ -27,7 +27,7 @@ export interface FailoverOutcome<S, T> {
   result: T;
   /** The step that ultimately succeeded. */
   step: S;
-  /** Total run() invocations across all steps — useful for assertions/metrics. */
+  /** Total run() invocations across all steps, useful for assertions/metrics. */
   totalAttempts: number;
 }
 

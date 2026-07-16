@@ -1,7 +1,7 @@
 /**
  * API-key authorization for the gateway.
  *
- * When the allowlist is empty, authentication is disabled — the endpoint is open
+ * When the allowlist is empty, authentication is disabled and the endpoint is open
  * (fine for local dev; NOT recommended for a public deploy). When it's non-empty,
  * a request must present a key that's in the set.
  */

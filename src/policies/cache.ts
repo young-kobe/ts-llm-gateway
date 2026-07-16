@@ -4,7 +4,7 @@ import type { ChatRequest, ChatResponse, ProviderName } from '../types.js';
 /**
  * Response cache keyed on request identity, with LRU eviction and optional TTL.
  *
- * A cache hit returns without ever touching a provider — that's the whole point
+ * A cache hit returns without ever touching a provider; that's the whole point
  * (and where the Day-3 benchmark's hit-vs-miss latency gap comes from). Identity
  * is the resolved provider + model + messages + generation params, so any change
  * that could change the completion produces a different key.

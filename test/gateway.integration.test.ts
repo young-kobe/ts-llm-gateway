@@ -24,7 +24,7 @@ function passingModel(text: string, counter?: { calls: number }): LanguageModelV
   });
 }
 
-/** A mock model that always throws — stands in for a downed provider. */
+/** A mock model that always throws, standing in for a downed provider. */
 function throwingModel(): LanguageModelV3 {
   return new MockLanguageModelV3({
     doGenerate: async () => {

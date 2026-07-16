@@ -6,7 +6,7 @@
 
 A minimal but real **LLM gateway proxy** in TypeScript/Node: one unified endpoint that
 routes to multiple providers behind a single interface, with production policies layered on
-top — rate limiting, retry/backoff with cross-provider failover, response caching, and
+top: rate limiting, retry/backoff with cross-provider failover, response caching, and
 streaming with client-driven cancellation.
 
 Built on Vercel's own stack: the [`ai`](https://www.npmjs.com/package/ai) SDK for the provider
@@ -15,8 +15,8 @@ abstraction, [`@ai-sdk/amazon-bedrock`](https://www.npmjs.com/package/@ai-sdk/am
 providers, and [Hono](https://hono.dev) for the HTTP layer.
 
 > **Status:** feature-complete. Unified `POST /v1/chat` routes to both providers behind one
-> interface, wrapped in three production policies — per-key **rate limiting**, **retry with
-> exponential backoff + cross-provider failover**, and an **LRU response cache** — plus **SSE
+> interface, wrapped in three production policies (per-key **rate limiting**, **retry with
+> exponential backoff + cross-provider failover**, and an **LRU response cache**), plus **SSE
 > token streaming with client-driven cancellation**, and abuse guards (API-key auth, IP-based
 > rate limiting, request caps). 37 tests (unit + HTTP integration) run without live keys; a
 > benchmark harness measures the cache and failover paths. Deploy config for Vercel is included.
@@ -28,9 +28,9 @@ Every feature here maps directly onto a piece of a production real-time streamin
 
 | RTSS piece (production) | Gateway feature it becomes |
 |---|---|
-| Kinesis shard-polling backpressure / request admission | **Rate limiting** — token-bucket per API key/route |
+| Kinesis shard-polling backpressure / request admission | **Rate limiting**: token-bucket per API key/route |
 | Retry/backoff on Kinesis throttling | **Retry + exponential backoff**, then **failover** to the secondary provider |
-| Shard-consumer cancellation tokens | **Streaming abort** — client disconnect cancels the upstream call |
+| Shard-consumer cancellation tokens | **Streaming abort**: client disconnect cancels the upstream call |
 | Composite routing keys | **Provider/model routing** |
 | SignalR streaming fan-out to dashboards | **SSE token streaming** to the client |
 
@@ -85,8 +85,8 @@ data: {"type":"done","provider":"bedrock","model":"...","cached":false,"usage":{
 ```
 
 If the client disconnects, the gateway aborts the upstream provider call rather than letting it
-run to completion — the RTSS cancellation-token bridge. (Streaming serves the primary provider;
-retry/failover apply to the non-streaming path.)
+run to completion. That is the RTSS cancellation-token bridge. (Streaming serves the primary
+provider; retry/failover apply to the non-streaming path.)
 
 ### `GET /health`
 
@@ -130,44 +130,44 @@ flowchart TD
 
 Providers hide behind a single `Provider` interface (`src/providers/index.ts`), so the gateway
 never imports a concrete SDK. That seam is what makes routing, failover, and keyless testing
-possible — tests inject a mock registry.
+possible: tests inject a mock registry.
 
 ## Policies
 
 Each policy is a standalone, unit-tested module in `src/policies/`, composed by the gateway in
 the order above. All use injectable clocks / sleep so behavior is tested deterministically.
 
-- **`rateLimit.ts`** — token bucket, one per caller (see [Abuse prevention](#abuse-prevention)
+- **`rateLimit.ts`**: token bucket, one per caller (see [Abuse prevention](#abuse-prevention)
   for how the bucket key is chosen). Configurable capacity (burst) and refill rate; returns
   `429` + `Retry-After` when a bucket is empty.
-- **`retry.ts`** — exponential backoff (`base · 2^n`, capped) per provider, then failover to the
+- **`retry.ts`**: exponential backoff (`base · 2^n`, capped) per provider, then failover to the
   next provider in the chain. A provider only joins the chain if it has a fallback model
   configured, since model ids are provider-specific.
-- **`cache.ts`** — LRU cache (optional TTL) keyed on a SHA-256 of the request identity
+- **`cache.ts`**: LRU cache (optional TTL) keyed on a SHA-256 of the request identity
   (resolved provider + model + messages + params). A hit returns without any provider call.
 
-Tuned via env vars — see `.env.example`.
+Tuned via env vars; see `.env.example`.
 
 ## Abuse prevention
 
 A public endpoint that spends money per call needs guarding. In-code (`src/server.ts`,
 `src/policies/auth.ts`), the gateway does, in order:
 
-1. **Body-size guard** — rejects oversized payloads (`413`) by `Content-Length` before parsing.
-2. **Rate limiting** — buckets *authorized* callers by their validated key and everyone else by
+1. **Body-size guard**: rejects oversized payloads (`413`) by `Content-Length` before parsing.
+2. **Rate limiting**: buckets *authorized* callers by their validated key and everyone else by
    **client IP** (`x-forwarded-for`). It deliberately never buckets by the raw caller-supplied
    key, so an attacker can't rotate `x-api-key` to mint a fresh bucket per request.
-3. **Auth gate** — when `GATEWAY_API_KEYS` is set, callers must present an allowlisted key
+3. **Auth gate**: when `GATEWAY_API_KEYS` is set, callers must present an allowlisted key
    (`x-api-key` or `Bearer`) or get `401`. Unset = open (local dev only).
-4. **Request caps** — clamps `maxTokens` to `MAX_OUTPUT_TOKENS`, caps message count / content
+4. **Request caps**: clamps `maxTokens` to `MAX_OUTPUT_TOKENS`, caps message count / content
    length, and optionally restricts models (`ALLOWED_MODELS`). Bounds the cost of any one request.
 
 **Honest limitation on serverless:** the rate limiter and cache are in-memory, so on Vercel their
-state is *per-instance* and resets on cold start — they don't enforce a global ceiling across
+state is *per-instance* and resets on cold start, so they don't enforce a global ceiling across
 instances. Treat them as best-effort. The durable backstops for a real deployment are:
 
-- **Vercel Firewall / Attack Challenge Mode** — edge-level, cross-instance IP rate limiting.
-- **Provider spend caps** — OpenAI usage limits + AWS Budgets, so abuse can't run up an unbounded
+- **Vercel Firewall / Attack Challenge Mode**: edge-level, cross-instance IP rate limiting.
+- **Provider spend caps**: OpenAI usage limits + AWS Budgets, so abuse can't run up an unbounded
   bill even if every in-app guard is bypassed. Set these regardless.
 - A shared store (Upstash Redis / Vercel KV) if you want per-key limits and cache hits to hold
   across instances.
@@ -176,21 +176,21 @@ instances. Treat them as best-effort. The durable backstops for a real deploymen
 
 The interesting part of a gateway is what you deliberately chose *not* to do.
 
-- **Providers behind one interface, injected.** The gateway core never imports a concrete SDK —
+- **Providers behind one interface, injected.** The gateway core never imports a concrete SDK;
   it takes a `Provider` registry. That single seam is what makes routing, cross-provider failover,
   and **keyless testing** (mock registry) all fall out for free. Every test runs with no live keys.
 - **Exact-match cache, not semantic.** Keys are a SHA-256 of the request identity (provider +
   model + messages + params). It's cheap, deterministic, and can never return a "close but wrong"
-  answer — the cost is that only verbatim repeats hit (retries, idempotent re-sends, evals, load
+  answer; the cost is that only verbatim repeats hit (retries, idempotent re-sends, evals, load
   tests), not paraphrases. Semantic caching would trade correctness guarantees for hit rate; not
   worth it here.
 - **In-memory cache & rate limiter are per-instance.** On Vercel's stateless, horizontally-scaled
   functions this is best-effort, not a global ceiling (see [Abuse prevention](#abuse-prevention)).
-  Chosen because the durable path — a shared store or edge firewall — adds infra and per-request
+  Chosen because the durable path (a shared store or edge firewall) adds infra and per-request
   latency for benefit that only materializes at real traffic. The `ResponseCache` `get`/`set` seam
   makes a Redis-backed store a drop-in when that day comes.
-- **Rate-limit bucketing by validated-key-or-IP**, never the raw caller-supplied header — otherwise
-  rotating `x-api-key` mints a fresh bucket per request and the limit is meaningless.
+- **Rate-limit bucketing by validated-key-or-IP**, never the raw caller-supplied header, since
+  otherwise rotating `x-api-key` mints a fresh bucket per request and the limit is meaningless.
 - **Streaming serves the primary provider only.** Retry/failover apply to the non-streaming path;
   failing over mid-stream after tokens are already sent to the client isn't safe, so it's out of
   scope by design rather than by omission.
@@ -203,17 +203,17 @@ Deliberately out of scope for this artifact, in rough priority order:
 
 - **Shared state** (Upstash Redis / Vercel KV) for a global rate limit, cross-instance cache hits,
   and per-key usage quotas / billing.
-- **Request coalescing (single-flight)** — collapse concurrent identical in-flight requests into
+- **Request coalescing (single-flight)**: collapse concurrent identical in-flight requests into
   one upstream call (the cache only dedupes *sequential* repeats, not simultaneous ones).
 - **Per-call timeouts** on the provider request, feeding the retry/failover path.
-- **Usage → cost accounting** — tokens × per-model price, surfaced per request and in aggregate.
+- **Usage to cost accounting**: tokens × per-model price, surfaced per request and in aggregate.
 - **Structured logging + tracing** (request id, provider, latency, cache hit, tokens).
 
 ## Develop
 
 ```bash
 npm install
-npm test          # runs the integration suite with mock providers — no keys needed
+npm test          # runs the integration suite with mock providers (no keys needed)
 npm run typecheck
 cp .env.example .env   # fill in AWS + OpenAI creds to run against live providers
 npm run dev
@@ -223,7 +223,7 @@ npm run dev
 
 Measured with `npm run bench`. **Honesty note:** these run without live provider keys, against
 a mock backend with a fixed injected latency (120 ms). So the numbers are real measurements of
-*the gateway itself* — cache-hit vs. cache-miss overhead and failover behavior — not of any real
+*the gateway itself*: cache-hit vs. cache-miss overhead and failover behavior, not of any real
 model. Re-run against live Bedrock/OpenAI after deploy for end-to-end provider latency.
 
 Simulated 120 ms backend, 200 iterations:
@@ -242,7 +242,7 @@ Simulated 120 ms backend, 200 iterations:
 ## Deploy (Vercel)
 
 `api/index.ts` wraps the Hono app in the Node.js Vercel adapter
-(`@hono/node-server/vercel` — not `hono/vercel`, which is the Edge/Web adapter) and
+(`@hono/node-server/vercel`, not `hono/vercel`, which is the Edge/Web adapter) and
 `vercel.json` rewrites all routes to that one function. `framework: null` keeps Vercel from
 also treating `src/` as a server entrypoint. To ship it under your own account:
 

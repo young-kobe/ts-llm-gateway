@@ -77,7 +77,7 @@ describe('withRetryAndFailover', () => {
     expect(sleeps).toEqual([100]);
   });
 
-  it('does not retry a non-retryable error — fails over straight away', async () => {
+  it('does not retry a non-retryable error, fails over straight away', async () => {
     const { options, sleeps } = opts({ maxAttempts: 3, isRetryable: () => false });
     const seen: string[] = [];
     const out = await withRetryAndFailover(
