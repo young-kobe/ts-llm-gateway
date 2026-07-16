@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "license": "MIT",
   "description": "Minimal but real LLM gateway proxy — one unified endpoint routing to multiple providers with production policies (rate limiting, retry/failover, caching, streaming).",
   "scripts": {
     "dev": "tsx watch src/index.ts",
