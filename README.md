@@ -20,7 +20,7 @@ providers, and [Hono](https://hono.dev) for the HTTP layer.
 > token streaming with client-driven cancellation**, abuse guards (API-key auth, IP-based
 > rate limiting, request caps), and a **live stats dashboard** (`/stats`). State (cache, rate
 > limiter, metrics) runs behind a **pluggable backend**: in-memory by default, or global + durable
-> via Upstash Redis when configured. 44 tests (unit + HTTP integration) run without live keys; a
+> via Upstash Redis when configured. 53 tests (unit + HTTP integration) run without live keys; a
 > benchmark harness measures the cache and failover paths. Deploy config for Vercel is included.
 
 ## Why this exists
@@ -152,6 +152,9 @@ the order above. All use injectable clocks / sleep so behavior is tested determi
 - **`retry.ts`**: exponential backoff (`base · 2^n`, capped) per provider, then failover to the
   next provider in the chain. A provider only joins the chain if it has a fallback model
   configured, since model ids are provider-specific.
+- **`timeout.ts`**: a per-provider-call deadline (`PROVIDER_TIMEOUT_MS`). A stalled call becomes a
+  fast, retryable failure that triggers failover, rather than hanging until the function's max
+  duration. Applies to the non-streaming path.
 - **`cache.ts`**: LRU cache (optional TTL) keyed on a SHA-256 of the request identity
   (resolved provider + model + messages + params). A hit returns without any provider call.
 
@@ -217,7 +220,8 @@ Deliberately out of scope for this artifact, in rough priority order:
   see [Abuse prevention](#abuse-prevention)).
 - **Request coalescing (single-flight)**: collapse concurrent identical in-flight requests into
   one upstream call (the cache only dedupes *sequential* repeats, not simultaneous ones).
-- **Per-call timeouts** on the provider request, feeding the retry/failover path.
+- **Streaming timeouts**: a time-to-first-token deadline for the SSE path (the non-streaming path
+  already has a per-call timeout).
 - **Usage to cost accounting**: tokens × per-model price, surfaced per request and in aggregate.
 - **Structured logging + tracing** (request id, provider, latency, cache hit, tokens).
 

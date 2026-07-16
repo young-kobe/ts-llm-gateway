@@ -3,6 +3,7 @@ import type { ChatRequest, ChatResponse, ProviderName } from './types.js';
 import type { ProviderRegistry } from './providers/index.js';
 import { cacheKey, type ResponseCache } from './policies/cache.js';
 import { withRetryAndFailover, type RetryOptions } from './policies/retry.js';
+import { withTimeout } from './policies/timeout.js';
 
 /** Everything the gateway core needs, injected so it stays testable without live keys. */
 export interface GatewayDeps {
@@ -17,6 +18,8 @@ export interface GatewayDeps {
    * is provider-specific and won't be valid on a different provider.
    */
   fallbackModels?: Partial<Record<ProviderName, string>>;
+  /** Per-provider-call deadline in ms. A timeout is retryable, so it triggers failover. */
+  timeoutMs?: number;
 }
 
 /** Raised when a request names a provider that isn't in the registry. */
@@ -64,12 +67,17 @@ export async function handleChat(req: ChatRequest, deps: GatewayDeps): Promise<C
     async ({ provider, model }): Promise<{ text: string; usage: ChatResponse['usage'] }> => {
       const impl = deps.providers[provider];
       if (!impl) throw new UnknownProviderError(provider);
-      const generated = await generateText({
-        model: impl.languageModel(model),
-        messages: req.messages,
-        temperature: req.temperature,
-        maxOutputTokens: req.maxTokens,
-      });
+      const call = (abortSignal?: AbortSignal) =>
+        generateText({
+          model: impl.languageModel(model),
+          messages: req.messages,
+          temperature: req.temperature,
+          maxOutputTokens: req.maxTokens,
+          abortSignal,
+        });
+      // A stalled provider call becomes a fast, retryable failure (so it fails over)
+      // rather than hanging until the serverless function's max duration.
+      const generated = deps.timeoutMs ? await withTimeout(call, deps.timeoutMs) : await call();
       return {
         text: generated.text,
         usage: {

@@ -33,6 +33,13 @@ function throwingModel(): LanguageModelV3 {
   });
 }
 
+/** A mock model whose call never resolves, standing in for a stalled provider. */
+function hangingModel(): LanguageModelV3 {
+  return new MockLanguageModelV3({
+    doGenerate: () => new Promise(() => {}),
+  });
+}
+
 function provider(name: ProviderName, model: LanguageModelV3): Provider {
   return { name, languageModel: () => model };
 }
@@ -141,6 +148,42 @@ describe('POST /v1/chat', () => {
     expect(body.provider).toBe('openai');
     expect(body.model).toBe('gpt-4o-mini');
     expect(body.text).toBe('served by openai');
+  });
+
+  it('times out a stalled primary and fails over instead of hanging', async () => {
+    const app = createServer({
+      providers: registryOf(hangingModel(), passingModel('served by openai')),
+      defaultProvider: 'bedrock',
+      fallbackModels: { openai: 'gpt-4o-mini' },
+      retry: { maxAttempts: 1, baseDelayMs: 0, maxDelayMs: 0, sleep: async () => {} },
+      timeoutMs: 30, // primary stalls, so the 30ms deadline forces failover
+    });
+
+    const res = await app.request('/v1/chat', post({
+      model: 'anthropic.claude-3-5-sonnet',
+      messages: [{ role: 'user', content: 'hi' }],
+    }));
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.provider).toBe('openai');
+    expect(body.text).toBe('served by openai');
+  });
+
+  it('returns 502 when the only provider stalls past the deadline', async () => {
+    const app = createServer({
+      providers: registryOf(hangingModel(), hangingModel()),
+      defaultProvider: 'bedrock',
+      retry: { maxAttempts: 1, baseDelayMs: 0, maxDelayMs: 0, sleep: async () => {} },
+      timeoutMs: 30,
+    });
+
+    const res = await app.request('/v1/chat', post({
+      model: 'anthropic.claude-3-5-sonnet',
+      messages: [{ role: 'user', content: 'hi' }],
+    }));
+
+    expect(res.status).toBe(502);
   });
 
   it('returns 429 with a Retry-After header once the rate limit is exhausted', async () => {
