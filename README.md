@@ -273,6 +273,12 @@ Regardless of backend, set the two provider-side backstops so abuse can't run up
 - **Vercel Firewall / Attack Challenge Mode**: edge-level IP rate limiting, complementary to the
   app-level limiter.
 
+**Keeping an open demo cheap.** For a public endpoint on your own spend, the single biggest lever is
+`ALLOWED_MODELS` (restrict to your cheapest model; a request for a pricier one gets a `400`). Pair it
+with a low `MAX_OUTPUT_TOKENS`, tight input caps, and a small rate limit, and put an **AWS Budget**
+underneath as the hard ceiling. `.env.example` lists a recommended "cheap public deploy" set. If it
+still gets abused, set `GATEWAY_API_KEYS` to close the endpoint to key holders only.
+
 ## Design decisions & trade-offs
 
 The interesting part of a gateway is what you deliberately chose *not* to do.
@@ -343,6 +349,21 @@ Simulated 120 ms backend, 200 iterations:
 - **Failover demo:** with the primary forced down, the request failed over and was **served by
   `openai` in 413 ms** (two failed primary attempts × 120 ms + 50 ms backoff + one 120 ms
   secondary call).
+
+### Live (production)
+
+Measured against the deployed endpoint (`us.anthropic.claude-haiku-4-5-20251001-v1:0` on Bedrock),
+from a single client. Unlike the harness above, these are **end-to-end**: client network RTT +
+gateway + Redis + real model inference.
+
+| Path | p50 | Notes |
+|---|---|---|
+| cache **hit** | ~0.22 s | served from the shared Redis cache; no provider call |
+| cache **miss** | ~1.27 s | full round-trip including Claude Haiku 4.5 inference (~1 s) |
+
+A hit is ~6x faster because it skips the provider call. The gateway's own overhead is a small slice
+of the miss; the rest is network and model inference (the harness above isolates the gateway
+overhead at sub-millisecond for hits).
 
 ## Deploy (Vercel)
 
