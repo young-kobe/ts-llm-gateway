@@ -1,5 +1,9 @@
 # ts-llm-gateway
 
+[![CI](https://github.com/young-kobe/ts-llm-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/young-kobe/ts-llm-gateway/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)
+
 A minimal but real **LLM gateway proxy** in TypeScript/Node: one unified endpoint that
 routes to multiple providers behind a single interface, with production policies layered on
 top — rate limiting, retry/backoff with cross-provider failover, response caching, and
@@ -90,20 +94,38 @@ Liveness check → `{ "ok": true }`.
 
 ## Architecture
 
-```
-POST /v1/chat
-     │
-     ▼
- server.ts ── rate limit (429) ── zod validation (400)
-     │
-     ▼
- gateway.ts ── cache lookup ──hit──▶ return (no provider call)
-     │  miss
-     ▼
- retry + backoff ──exhausted──▶ failover to next provider
-     │
-     ▼
- providers/{bedrock,openai}.ts ─▶ AI SDK generateText ─▶ cache store
+```mermaid
+flowchart TD
+    C([client]) --> BODY{body size ok?}
+    BODY -- no --> E413[413 payload_too_large]
+    BODY -- yes --> RL{rate limit<br/>key or IP}
+    RL -- exhausted --> E429[429 + Retry-After]
+    RL -- ok --> AUTH{authorized?}
+    AUTH -- no --> E401[401 unauthorized]
+    AUTH -- yes --> VAL{valid + caps?}
+    VAL -- no --> E400[400 invalid_request]
+    VAL -- yes --> CACHE{cache hit?}
+    CACHE -- hit --> HIT[return cached<br/>no provider call]
+    CACHE -- miss --> RETRY[retry + backoff]
+    RETRY -- provider down --> FAIL[failover to next provider]
+    RETRY --> GEN[AI SDK generateText / streamText]
+    FAIL --> GEN
+    GEN --> P[(Bedrock / OpenAI)]
+    GEN --> STORE[cache store] --> RESP([response / SSE stream])
+
+    subgraph "server.ts"
+        BODY
+        RL
+        AUTH
+        VAL
+    end
+    subgraph "gateway.ts + stream.ts"
+        CACHE
+        RETRY
+        FAIL
+        GEN
+        STORE
+    end
 ```
 
 Providers hide behind a single `Provider` interface (`src/providers/index.ts`), so the gateway
@@ -149,6 +171,43 @@ instances. Treat them as best-effort. The durable backstops for a real deploymen
   bill even if every in-app guard is bypassed. Set these regardless.
 - A shared store (Upstash Redis / Vercel KV) if you want per-key limits and cache hits to hold
   across instances.
+
+## Design decisions & trade-offs
+
+The interesting part of a gateway is what you deliberately chose *not* to do.
+
+- **Providers behind one interface, injected.** The gateway core never imports a concrete SDK —
+  it takes a `Provider` registry. That single seam is what makes routing, cross-provider failover,
+  and **keyless testing** (mock registry) all fall out for free. Every test runs with no live keys.
+- **Exact-match cache, not semantic.** Keys are a SHA-256 of the request identity (provider +
+  model + messages + params). It's cheap, deterministic, and can never return a "close but wrong"
+  answer — the cost is that only verbatim repeats hit (retries, idempotent re-sends, evals, load
+  tests), not paraphrases. Semantic caching would trade correctness guarantees for hit rate; not
+  worth it here.
+- **In-memory cache & rate limiter are per-instance.** On Vercel's stateless, horizontally-scaled
+  functions this is best-effort, not a global ceiling (see [Abuse prevention](#abuse-prevention)).
+  Chosen because the durable path — a shared store or edge firewall — adds infra and per-request
+  latency for benefit that only materializes at real traffic. The `ResponseCache` `get`/`set` seam
+  makes a Redis-backed store a drop-in when that day comes.
+- **Rate-limit bucketing by validated-key-or-IP**, never the raw caller-supplied header — otherwise
+  rotating `x-api-key` mints a fresh bucket per request and the limit is meaningless.
+- **Streaming serves the primary provider only.** Retry/failover apply to the non-streaming path;
+  failing over mid-stream after tokens are already sent to the client isn't safe, so it's out of
+  scope by design rather than by omission.
+- **`maxTokens` clamped before the cache key is computed**, so requests asking for 5000 vs 2000
+  tokens normalize to the same capped value and can share a cache entry.
+
+## Production next steps
+
+Deliberately out of scope for this artifact, in rough priority order:
+
+- **Shared state** (Upstash Redis / Vercel KV) for a global rate limit, cross-instance cache hits,
+  and per-key usage quotas / billing.
+- **Request coalescing (single-flight)** — collapse concurrent identical in-flight requests into
+  one upstream call (the cache only dedupes *sequential* repeats, not simultaneous ones).
+- **Per-call timeouts** on the provider request, feeding the retry/failover path.
+- **Usage → cost accounting** — tokens × per-model price, surfaced per request and in aggregate.
+- **Structured logging + tracing** (request id, provider, latency, cache hit, tokens).
 
 ## Develop
 
