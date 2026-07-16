@@ -70,20 +70,27 @@ describe('auth gate', () => {
 });
 
 describe('rate-limit bucketing', () => {
-  it('buckets anonymous callers by IP: rotating x-api-key does NOT grant fresh buckets', async () => {
+  it('buckets anonymous callers by the unspoofable real IP, ignoring rotated x-api-key AND x-forwarded-for', async () => {
     const app = createServer({
       providers: registryOf(passingModel()),
       defaultProvider: 'bedrock',
       security: sec(), // auth open, so the presented key is untrusted for bucketing
       rateLimiter: new RateLimiter({ capacity: 1, refillPerSecond: 1, now: () => 1_000 }),
     });
-    const ip = { 'x-forwarded-for': '203.0.113.7' };
-
-    const first = await app.request('/v1/chat', post(CHAT, { ...ip, 'x-api-key': 'rot-1' }));
-    const second = await app.request('/v1/chat', post(CHAT, { ...ip, 'x-api-key': 'rot-2' }));
+    // Same real client (x-real-ip is platform-set and unspoofable), but an attacker
+    // rotates both the api key AND the caller-controlled x-forwarded-for header to try
+    // for a fresh bucket. Neither must work, or the rate limit is trivially bypassed.
+    const first = await app.request(
+      '/v1/chat',
+      post(CHAT, { 'x-real-ip': '203.0.113.7', 'x-forwarded-for': '1.1.1.1', 'x-api-key': 'rot-1' }),
+    );
+    const second = await app.request(
+      '/v1/chat',
+      post(CHAT, { 'x-real-ip': '203.0.113.7', 'x-forwarded-for': '9.9.9.9', 'x-api-key': 'rot-2' }),
+    );
 
     expect(first.status).toBe(200);
-    expect(second.status).toBe(429); // same IP bucket despite a different key
+    expect(second.status).toBe(429); // same x-real-ip bucket; the rotated headers were ignored
   });
 
   it('buckets authorized callers by their key (independent buckets per key)', async () => {

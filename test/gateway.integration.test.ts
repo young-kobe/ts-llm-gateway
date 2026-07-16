@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { MockLanguageModelV3 } from 'ai/test';
+import { APICallError } from 'ai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 import { createServer } from '../src/server.js';
 import { RateLimiter } from '../src/policies/rateLimit.js';
@@ -31,6 +32,22 @@ function throwingModel(counter?: { calls: number }): LanguageModelV3 {
     doGenerate: async () => {
       if (counter) counter.calls++;
       throw new Error('primary provider down');
+    },
+  });
+}
+
+/** A mock model that throws a non-retryable 4xx (e.g. a bad model id), like a real provider. */
+function badRequestModel(counter?: { calls: number }): LanguageModelV3 {
+  return new MockLanguageModelV3({
+    doGenerate: async () => {
+      if (counter) counter.calls++;
+      throw new APICallError({
+        message: 'invalid model id',
+        url: 'https://provider.example/v1',
+        requestBodyValues: {},
+        statusCode: 400,
+        isRetryable: false,
+      });
     },
   });
 }
@@ -150,6 +167,48 @@ describe('POST /v1/chat', () => {
     expect(body.provider).toBe('openai');
     expect(body.model).toBe('gpt-4o-mini');
     expect(body.text).toBe('served by openai');
+  });
+
+  it('does NOT retry a deterministic 4xx: one shot at the primary, then straight to failover', async () => {
+    const primaryCalls = { calls: 0 };
+    const secondaryCalls = { calls: 0 };
+    const app = createServer({
+      providers: registryOf(badRequestModel(primaryCalls), passingModel('served by openai', secondaryCalls)),
+      defaultProvider: 'bedrock',
+      fallbackModels: { openai: 'gpt-4o-mini' },
+      retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0, sleep: async () => {} },
+    });
+
+    const res = await app.request('/v1/chat', post({
+      model: 'anthropic.claude-3-5-sonnet',
+      messages: [{ role: 'user', content: 'hi' }],
+    }));
+
+    // The money fix: a 400 is deterministic, so we do NOT burn all 3 attempts hammering
+    // bedrock; we spend one and fail over. Failover to a *different* provider/model is by
+    // design (retry.ts contract) and may legitimately succeed, as it does here.
+    expect(primaryCalls.calls).toBe(1); // attempted once, not maxAttempts=3
+    expect(secondaryCalls.calls).toBe(1);
+    expect(res.status).toBe(200);
+    expect((await res.json() as any).provider).toBe('openai');
+  });
+
+  it('a retryable failure still uses all attempts before failing over (contrast with the 4xx case)', async () => {
+    const primaryCalls = { calls: 0 };
+    const app = createServer({
+      providers: registryOf(throwingModel(primaryCalls), passingModel('served by openai')),
+      defaultProvider: 'bedrock',
+      fallbackModels: { openai: 'gpt-4o-mini' },
+      retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0, sleep: async () => {} },
+    });
+
+    const res = await app.request('/v1/chat', post({
+      model: 'anthropic.claude-3-5-sonnet',
+      messages: [{ role: 'user', content: 'hi' }],
+    }));
+
+    expect(res.status).toBe(200);
+    expect(primaryCalls.calls).toBe(3); // a plain error is treated as transient: retried in full
   });
 
   it('times out a stalled primary and fails over instead of hanging', async () => {

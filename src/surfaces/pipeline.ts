@@ -43,14 +43,21 @@ function presentedKey(c: Context): string | undefined {
   return undefined;
 }
 
-/** Best-effort client IP from the platform-set forwarding headers (Vercel sets these). */
+/**
+ * Client IP for rate-limit bucketing, from the platform-set forwarding headers.
+ * We use `x-real-ip` (which Vercel sets to the real connecting IP and overwrites on
+ * any client-supplied value), NOT the leftmost `x-forwarded-for` entry: that entry is
+ * caller-controlled, so an attacker could rotate it to mint a fresh bucket per request
+ * and bypass the limit entirely. `x-vercel-forwarded-for` is a platform-set fallback.
+ * When neither is present (e.g. local dev) callers share one 'unknown' bucket, which
+ * fails safe (closed) by lumping unidentifiable callers together.
+ */
 function clientIp(c: Context): string {
-  const xff = c.req.header('x-forwarded-for');
-  if (xff) {
-    const first = xff.split(',')[0]?.trim();
-    if (first) return first;
-  }
-  return c.req.header('x-real-ip') ?? 'unknown';
+  const realIp = c.req.header('x-real-ip');
+  if (realIp) return realIp;
+  const vercel = c.req.header('x-vercel-forwarded-for');
+  if (vercel) return vercel.split(',')[0]?.trim() ?? 'unknown';
+  return 'unknown';
 }
 
 /**
