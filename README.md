@@ -50,7 +50,7 @@ Non-streaming chat completion.
 // request
 {
   "provider": "bedrock",          // optional; defaults to DEFAULT_PROVIDER
-  "model": "anthropic.claude-3-sonnet-20240229-v1:0",
+  "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
   "messages": [{ "role": "user", "content": "Hello" }],
   "temperature": 0.7,             // optional
   "maxTokens": 512                // optional
@@ -61,24 +61,26 @@ Non-streaming chat completion.
 // response
 {
   "provider": "bedrock",
-  "model": "anthropic.claude-3-sonnet-20240229-v1:0",
+  "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
   "text": "Hello! ...",
   "usage": { "inputTokens": 7, "outputTokens": 11 },
   "cached": false          // true when served from the response cache
 }
 ```
 
-Known-good Bedrock model ids (enable them first in Bedrock → Model access, per region):
+Bedrock model ids (enable access first in Bedrock → Model access, per region). Pick an **Active**
+Anthropic model from the Model catalog: AWS marks older models **Legacy** and denies them once
+they've been idle 30 days, and current models are invocable only through a `us.` cross-region
+**inference profile** (a bare id returns `ValidationException ... inference profile`). These are
+verified working as of this writing:
 
 | Model id | Notes |
 |---|---|
-| `anthropic.claude-3-haiku-20240307-v1:0` | Direct invoke, cheapest; good for a smoke test |
-| `anthropic.claude-3-sonnet-20240229-v1:0` | Direct invoke (Claude 3 Sonnet) |
-| `us.anthropic.claude-3-7-sonnet-20250219-v1:0` | Needs the `us.` cross-region **inference profile** |
+| `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Claude Haiku 4.5, cheapest; good for a smoke test |
+| `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Claude Sonnet 4.5 |
 
-Most newer Claude models are invocable only through an inference profile (the `us.` prefix). If a
-bare id returns `ValidationException ... inference profile`, switch to the `us.`-prefixed id. Copy
-the exact id from Bedrock → Model catalog.
+Copy the exact id from Bedrock → Model catalog; model availability changes over time, so treat the
+catalog's "Active" list as the source of truth rather than any hardcoded id here.
 
 `provider`/`model` reflect who *actually* served the response, so after a failover they name the
 secondary. A `429` (with a `Retry-After` header) means the caller's rate-limit bucket is empty.
@@ -344,17 +346,37 @@ Simulated 120 ms backend, 200 iterations:
 
 ## Deploy (Vercel)
 
-`api/index.ts` wraps the Hono app in the Node.js Vercel adapter
-(`@hono/node-server/vercel`, not `hono/vercel`, which is the Edge/Web adapter) and
-`vercel.json` rewrites all routes to that one function. `framework: null` keeps Vercel from
-also treating `src/` as a server entrypoint. To ship it under your own account:
+`vercel.json` rewrites all routes to the single function in `api/index.ts`, which serves the whole
+Hono app. `framework: null` keeps Vercel from also treating `src/` as a server entrypoint, and a
+`public/` output holds the static landing page.
+
+`api/index.ts` is a **hand-written Node.js handler**, not one of Hono's Vercel adapters, and that is
+deliberate:
+
+- `hono/vercel`'s `handle` returns a `Response`, but Vercel's Node runtime expects a `(req, res)`
+  handler and drops the returned `Response` (the request hangs). It is the Edge/Web adapter.
+- `@hono/node-server/vercel`'s `handle` has the right `(req, res)` shape, but it reads the request
+  body from the raw Node stream. Vercel's Node runtime has **already consumed that stream** to
+  populate `req.body`, so `c.req.json()` waits on a stream that never delivers and **every POST
+  hangs until the function times out** (GET and the pre-body `413` guard are unaffected, which makes
+  this a nasty one to spot).
+
+So the handler reconstructs a Web `Request` from the already-parsed `req.body`, drives `app.fetch`
+directly, and streams the `Response` back (works for both JSON and SSE). This keeps the app itself a
+standard, portable Hono app while sidestepping the runtime's body handling.
+
+To ship it under your own account:
 
 ```bash
 npm i -g vercel
 vercel                 # link + deploy a preview
-# set env vars (AWS_*, OPENAI_API_KEY, *_FALLBACK_MODEL, policy knobs) in the dashboard
+# set env vars (AWS_*, OPENAI_API_KEY, *_FALLBACK_MODEL, KV_REST_API_*, policy knobs) in the dashboard
 vercel --prod          # deploy production, capture the live URL
 ```
+
+Note: `KV_REST_API_TOKEN` must be the read-**write** token (not the read-only one); the rate limiter
+writes to it. And keep `PROVIDER_TIMEOUT_MS` below the function's `maxDuration` so a stalled provider
+becomes a clean `502`/failover rather than a platform timeout.
 
 - Live URL: https://ts-llm-gateway.vercel.app/
 
