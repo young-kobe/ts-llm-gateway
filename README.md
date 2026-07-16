@@ -207,9 +207,12 @@ the order above. All use injectable clocks / sleep so behavior is tested determi
 - **`rateLimit.ts`**: token bucket, one per caller (see [Abuse prevention](#abuse-prevention)
   for how the bucket key is chosen). Configurable capacity (burst) and refill rate; returns
   `429` + `Retry-After` when a bucket is empty.
-- **`retry.ts`**: exponential backoff (`base · 2^n`, capped) per provider, then failover to the
-  next provider in the chain. A provider only joins the chain if it has a fallback model
-  configured, since model ids are provider-specific.
+- **`retry.ts`**: exponential backoff (`base · 2^n`, capped, with equal jitter so many callers
+  that failed together don't retry in lockstep) per provider, then failover to the next provider
+  in the chain. A provider only joins the chain if it has a fallback model configured, since model
+  ids are provider-specific. A deterministic `4xx` (a bad model id, a validation error) is treated
+  as non-retryable, so it fails over once instead of burning every attempt on a call that will fail
+  identically.
 - **`timeout.ts`**: a per-provider-call deadline (`PROVIDER_TIMEOUT_MS`). A stalled call becomes a
   fast, retryable failure that triggers failover, rather than hanging until the function's max
   duration. Applies to the non-streaming path.
@@ -231,10 +234,13 @@ A public endpoint that spends money per call needs guarding. In-code (`src/serve
 
 1. **Body-size guard**: rejects oversized payloads (`413`) by `Content-Length` before parsing.
 2. **Rate limiting**: buckets *authorized* callers by their validated key and everyone else by
-   **client IP** (`x-forwarded-for`). It deliberately never buckets by the raw caller-supplied
-   key, so an attacker can't rotate `x-api-key` to mint a fresh bucket per request.
+   the platform-set **`x-real-ip`** (which Vercel overwrites, so a caller can't spoof it). It
+   deliberately never buckets by a raw, caller-controlled value, the leftmost `x-forwarded-for`
+   or an unvalidated `x-api-key`, so an attacker can rotate neither header to mint a fresh bucket
+   per request and bypass the limit.
 3. **Auth gate**: when `GATEWAY_API_KEYS` is set, callers must present an allowlisted key
-   (`x-api-key` or `Bearer`) or get `401`. Unset = open (local dev only).
+   (`x-api-key` or `Bearer`) or get `401`; keys are compared in **constant time** (SHA-256 +
+   `timingSafeEqual`, no early exit) so response latency doesn't leak a key. Unset = open (local dev only).
 4. **Request caps**: clamps `maxTokens` to `MAX_OUTPUT_TOKENS`, caps message count / content
    length, and optionally restricts models (`ALLOWED_MODELS`). Bounds the cost of any one request.
 
@@ -249,7 +255,8 @@ The request-path Redis calls are also bounded and **fail soft**: a slow or unrea
 never hang a request. Each op has a short deadline, after which the rate limiter **falls back to
 per-instance in-memory limiting** (a looser bound, never unlimited) and the cache degrades to a
 **miss**. So a Redis outage costs a bit of latency and the *global* rate limit (each instance still
-enforces its own bucket), not availability. Metric writes are fire-and-forget for the same reason.
+enforces its own bucket), not availability. Metric writes are fire-and-forget and batched into a
+single pipelined round-trip per request (one Upstash call instead of ~9), for the same reason.
 
 **Which guards survive a Redis outage.** Only the rate limiter is Redis-backed, and it degrades (to
 per-instance limiting) rather than failing. Everything that bounds *cost* is in-memory and keeps
@@ -385,6 +392,11 @@ deliberate:
 So the handler reconstructs a Web `Request` from the already-parsed `req.body`, drives `app.fetch`
 directly, and streams the `Response` back (works for both JSON and SSE). This keeps the app itself a
 standard, portable Hono app while sidestepping the runtime's body handling.
+
+The handler also wires client disconnect (`res` `close`) to cancel the response reader. This is
+what makes the streaming abort work on this runtime: Hono's `streamSSE` only listens to the request
+signal on Bun, so on Vercel's Node runtime the cancel of the response stream is the one signal that
+propagates through to `onAbort` and tears down the upstream provider call.
 
 To ship it under your own account:
 
