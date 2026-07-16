@@ -59,14 +59,14 @@ export function registerOpenAIChat(app: Hono, ctx: ApiContext): void {
         sse.onAbort(() => controller.abort());
 
         const meta = newCompletionMeta();
-        let roleSent = false;
+        // OpenAI's first chunk is always the assistant-role delta, even for an
+        // empty completion. Emit it up-front so a zero-delta stream still opens
+        // correctly rather than sending only the finish chunk + [DONE].
+        await sse.writeSSE({ data: JSON.stringify(openAIChunk.role(meta, body.model)) });
+
         const start = performance.now();
         for await (const event of streamChat(chatReq, ctx.deps, controller.signal)) {
           if (event.type === 'delta') {
-            if (!roleSent) {
-              await sse.writeSSE({ data: JSON.stringify(openAIChunk.role(meta, body.model)) });
-              roleSent = true;
-            }
             await sse.writeSSE({ data: JSON.stringify(openAIChunk.content(meta, body.model, event.text)) });
           } else if (event.type === 'done') {
             await sse.writeSSE({ data: JSON.stringify(openAIChunk.finish(meta, body.model)) });

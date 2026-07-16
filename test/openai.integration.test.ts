@@ -159,4 +159,25 @@ describe('POST /v1/chat/completions (OpenAI-compatible)', () => {
     expect(body).toContain('"finish_reason":"stop"');
     expect(body).toContain('data: [DONE]');
   });
+
+  it('still emits the opening role frame when the completion produces no deltas', async () => {
+    // A model that returns an empty completion (zero text deltas). A strict OpenAI
+    // parser still expects the leading assistant-role chunk before the finish.
+    const app = createServer({
+      providers: registryOf(streamingModel([]), passingModel('unused')),
+      defaultProvider: 'bedrock',
+    });
+
+    const res = await app.request('/v1/chat/completions', post({
+      model: 'anthropic.claude-3-5-sonnet',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+    }));
+
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain('"role":"assistant"'); // role frame present despite no deltas
+    expect(body).toContain('"finish_reason":"stop"');
+    expect(body).toContain('data: [DONE]');
+  });
 });
