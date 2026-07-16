@@ -40,7 +40,10 @@ export function buildRuntime(config: Config, overrides?: ServerOverrides): ApiCo
   const rateLimiter =
     overrides?.rateLimiter ??
     (redis
-      ? new RedisRateLimiter(createRatelimit(redis, config.rateLimit.capacity, config.rateLimit.refillPerSecond))
+      ? new RedisRateLimiter(
+          createRatelimit(redis, config.rateLimit.capacity, config.rateLimit.refillPerSecond),
+          new RateLimiter(config.rateLimit), // per-instance fallback if the shared store is down
+        )
       : new RateLimiter(config.rateLimit));
 
   const metrics = overrides?.metrics ?? (redis ? new RedisMetrics(redis) : new Metrics());

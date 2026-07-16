@@ -83,19 +83,22 @@ export class RedisRateLimiter implements Limiter {
 
   constructor(
     private readonly limiter: DistributedLimiter,
+    /** Per-instance limiter used when the shared store is slow or unreachable. */
+    private readonly fallback: Limiter,
     now: () => number = Date.now,
     private readonly timeoutMs: number = STORE_OP_TIMEOUT_MS,
   ) {
     this.now = now;
   }
 
-  async check(key: string): Promise<RateLimitResult> {
-    // Fail OPEN when the shared limiter is slow or unreachable: admitting a request
-    // is far better than hanging it for the whole function duration on a degraded
-    // Redis. A bounded op with a null fallback distinguishes "no answer" from a real
-    // decision without ever blocking indefinitely.
+  async check(key: string, cost = 1): Promise<RateLimitResult> {
+    // When the shared limiter is slow or unreachable, degrade to per-instance
+    // in-memory limiting rather than admitting unconditionally. A Redis outage then
+    // loosens the limit (each instance enforces its own bucket, so up to
+    // N-instances-worth of traffic) but never removes it, and never hangs the
+    // request. A bounded op with a null result signals "no answer from the store".
     const result = await withDeadline(this.limiter.limit(key), this.timeoutMs, null);
-    if (!result) return { allowed: true, remaining: 0, retryAfterMs: 0 };
+    if (!result) return this.fallback.check(key, cost);
     return {
       allowed: result.success,
       remaining: result.remaining,
