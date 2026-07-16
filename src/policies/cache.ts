@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ChatRequest, ChatResponse, ProviderName } from '../types.js';
-import type { RedisLike } from '../store/redis.js';
+import { STORE_OP_TIMEOUT_MS, withDeadline, type RedisLike } from '../store/redis.js';
 
 /**
  * Response cache keyed on request identity, with optional TTL.
@@ -48,13 +48,18 @@ export class ResponseCache {
   private readonly entries = new Map<string, Entry>();
   private readonly now: () => number;
 
-  constructor(private readonly opts: CacheOptions, private readonly redis?: RedisLike) {
+  constructor(
+    private readonly opts: CacheOptions,
+    private readonly redis?: RedisLike,
+    private readonly timeoutMs: number = STORE_OP_TIMEOUT_MS,
+  ) {
     this.now = opts.now ?? Date.now;
   }
 
   async get(key: string): Promise<ChatResponse | undefined> {
     if (this.redis) {
-      const value = await this.redis.get<ChatResponse>(redisKey(key));
+      // A slow/unreachable store degrades to a cache miss, never a hang.
+      const value = await withDeadline(this.redis.get<ChatResponse>(redisKey(key)), this.timeoutMs, null);
       return value ?? undefined;
     }
 
@@ -75,7 +80,9 @@ export class ResponseCache {
   async set(key: string, value: ChatResponse): Promise<void> {
     if (this.redis) {
       // Redis handles expiry (px) and memory-pressure eviction; no manual LRU needed.
-      await this.redis.set(redisKey(key), value, this.opts.ttlMs ? { px: this.opts.ttlMs } : undefined);
+      // Bounded so a slow store can't delay the response after a successful call.
+      const write = this.redis.set(redisKey(key), value, this.opts.ttlMs ? { px: this.opts.ttlMs } : undefined);
+      await withDeadline(write, this.timeoutMs, undefined);
       return;
     }
 

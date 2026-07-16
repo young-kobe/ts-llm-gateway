@@ -1,7 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import { ResponseCache, cacheKey } from '../src/policies/cache.js';
 import type { ChatRequest, ChatResponse } from '../src/types.js';
+import type { RedisLike } from '../src/store/redis.js';
 import { FakeRedis } from './helpers/fakeRedis.js';
+
+/** A RedisLike whose get/set behave as given; the rest are inert no-ops. */
+function stubRedis(get: RedisLike['get'], set: RedisLike['set']): RedisLike {
+  return {
+    get,
+    set,
+    hincrby: async () => 0,
+    hgetall: async () => null,
+    lpush: async () => 0,
+    ltrim: async () => undefined,
+    lrange: async () => [],
+  };
+}
 
 function req(overrides: Partial<ChatRequest> = {}): ChatRequest {
   return {
@@ -81,5 +95,25 @@ describe('ResponseCache (Redis backend)', () => {
     const other = new ResponseCache({ maxEntries: 10 }, redis);
     expect((await other.get('k'))?.text).toBe('from-redis');
     expect(cache.size).toBe(0); // nothing kept in local memory on the Redis path
+  });
+});
+
+describe('ResponseCache (Redis degradation)', () => {
+  it('degrades to a cache MISS when the store hangs, never blocking the request', async () => {
+    const redis = stubRedis(() => new Promise<never>(() => {}), () => new Promise<never>(() => {}));
+    const cache = new ResponseCache({ maxEntries: 10 }, redis, 20); // 20ms deadline
+
+    expect(await cache.get('k')).toBeUndefined(); // treated as a miss, not a hang
+    await cache.set('k', resp('x')); // must resolve without hanging
+  });
+
+  it('degrades to a cache MISS when the store throws', async () => {
+    const boom = async (): Promise<never> => {
+      throw new Error('redis down');
+    };
+    const cache = new ResponseCache({ maxEntries: 10 }, stubRedis(boom, boom), 20);
+
+    expect(await cache.get('k')).toBeUndefined();
+    await cache.set('k', resp('x')); // error swallowed, no throw
   });
 });

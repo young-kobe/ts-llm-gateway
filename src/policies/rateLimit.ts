@@ -1,4 +1,4 @@
-import type { DistributedLimiter } from '../store/redis.js';
+import { STORE_OP_TIMEOUT_MS, withDeadline, type DistributedLimiter } from '../store/redis.js';
 
 /**
  * Token-bucket rate limiter, one bucket per key (API key / route).
@@ -81,12 +81,21 @@ export class RateLimiter implements Limiter {
 export class RedisRateLimiter implements Limiter {
   private readonly now: () => number;
 
-  constructor(private readonly limiter: DistributedLimiter, now: () => number = Date.now) {
+  constructor(
+    private readonly limiter: DistributedLimiter,
+    now: () => number = Date.now,
+    private readonly timeoutMs: number = STORE_OP_TIMEOUT_MS,
+  ) {
     this.now = now;
   }
 
   async check(key: string): Promise<RateLimitResult> {
-    const result = await this.limiter.limit(key);
+    // Fail OPEN when the shared limiter is slow or unreachable: admitting a request
+    // is far better than hanging it for the whole function duration on a degraded
+    // Redis. A bounded op with a null fallback distinguishes "no answer" from a real
+    // decision without ever blocking indefinitely.
+    const result = await withDeadline(this.limiter.limit(key), this.timeoutMs, null);
+    if (!result) return { allowed: true, remaining: 0, retryAfterMs: 0 };
     return {
       allowed: result.success,
       remaining: result.remaining,
