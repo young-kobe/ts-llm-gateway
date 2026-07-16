@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ts-llm-gateway</title>
+    <style>
+      :root {
+        --bg: #0b0d10;
+        --panel: #14171c;
+        --border: #262b33;
+        --text: #e6e9ee;
+        --muted: #9aa4b2;
+        --accent: #7cc4ff;
+        --green: #57d38c;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f7f8fa;
+          --panel: #ffffff;
+          --border: #e3e7ec;
+          --text: #1a1d22;
+          --muted: #5b6472;
+          --accent: #1f6feb;
+          --green: #1a7f4b;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      main { max-width: 760px; margin: 0 auto; padding: 64px 24px 96px; }
+      h1 { font-size: 30px; margin: 0 0 4px; letter-spacing: -0.02em; }
+      .tag { color: var(--muted); margin: 0 0 32px; }
+      h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 40px 0 12px; }
+      code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .method { color: var(--green); font-weight: 600; }
+      .path { color: var(--accent); }
+      ul.routes { list-style: none; padding: 0; margin: 0; }
+      ul.routes li { padding: 12px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); margin-bottom: 10px; }
+      ul.routes li small { color: var(--muted); display: block; margin-top: 4px; }
+      pre { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto; font-size: 13px; }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+      th { color: var(--muted); font-weight: 600; }
+      a { color: var(--accent); }
+      footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>ts-llm-gateway</h1>
+      <p class="tag">
+        A minimal but real LLM gateway proxy; one unified endpoint routing to multiple providers
+        (Amazon Bedrock, OpenAI) behind production policies: rate limiting, retry/backoff with
+        cross-provider failover, response caching, and SSE streaming with client-driven cancellation.
+      </p>
+
+      <h2>Endpoints</h2>
+      <ul class="routes">
+        <li>
+          <span class="method">GET</span> <span class="path">/health</span>
+          <small>Liveness check → <code>{ "ok": true }</code></small>
+        </li>
+        <li>
+          <span class="method">POST</span> <span class="path">/v1/chat</span>
+          <small>Chat completion. Add <code>"stream": true</code> for an SSE token stream.</small>
+        </li>
+      </ul>
+
+      <h2>Example</h2>
+      <pre>curl -s https://ts-llm-gateway.vercel.app/v1/chat \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "messages": [{ "role": "user", "content": "Hello" }]
+  }'</pre>
+
+      <h2>Policies -> production lineage</h2>
+      <table>
+        <thead><tr><th>Real-time streaming system piece</th><th>Gateway feature</th></tr></thead>
+        <tbody>
+          <tr><td>Shard-polling backpressure / admission</td><td>Token-bucket rate limiting</td></tr>
+          <tr><td>Retry/backoff on throttling</td><td>Exponential backoff → provider failover</td></tr>
+          <tr><td>Consumer cancellation tokens</td><td>Client disconnect cancels the upstream call</td></tr>
+          <tr><td>Streaming fan-out</td><td>SSE token streaming</td></tr>
+        </tbody>
+      </table>
+
+      <footer>Built on the Vercel AI SDK + Hono, deployed as a Vercel Function.</footer>
+    </main>
+  </body>
+</html>

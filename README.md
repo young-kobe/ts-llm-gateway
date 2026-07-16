@@ -158,8 +158,10 @@ Simulated 120 ms backend, 200 iterations:
 
 ## Deploy (Vercel)
 
-`api/index.ts` wraps the Hono app in Vercel's serverless adapter (`hono/vercel`) and
-`vercel.json` rewrites all routes to it. To ship it under your own account:
+`api/index.ts` wraps the Hono app in the Node.js Vercel adapter
+(`@hono/node-server/vercel` — not `hono/vercel`, which is the Edge/Web adapter) and
+`vercel.json` rewrites all routes to that one function. `framework: null` keeps Vercel from
+also treating `src/` as a server entrypoint. To ship it under your own account:
 
 ```bash
 npm i -g vercel
