@@ -109,7 +109,8 @@
       <pre>curl -s https://ts-llm-gateway.vercel.app/v1/chat \
   -H 'content-type: application/json' \
   -d '{
-    "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "provider": "openai",
+    "model": "gpt-4o-mini",
     "messages": [{ "role": "user", "content": "Hello" }]
   }'
 
