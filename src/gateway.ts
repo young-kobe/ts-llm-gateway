@@ -55,7 +55,7 @@ export async function handleChat(req: ChatRequest, deps: GatewayDeps): Promise<C
 
   const key = deps.cache ? cacheKey(req, primary) : undefined;
   if (key && deps.cache) {
-    const hit = deps.cache.get(key);
+    const hit = await deps.cache.get(key);
     if (hit) return { ...hit, cached: true };
   }
 
@@ -89,6 +89,6 @@ export async function handleChat(req: ChatRequest, deps: GatewayDeps): Promise<C
     cached: false,
   };
 
-  if (key && deps.cache) deps.cache.set(key, response);
+  if (key && deps.cache) await deps.cache.set(key, response);
   return response;
 }
