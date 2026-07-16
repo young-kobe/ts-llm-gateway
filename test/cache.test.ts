@@ -14,6 +14,9 @@ function stubRedis(get: RedisLike['get'], set: RedisLike['set']): RedisLike {
     lpush: async () => 0,
     ltrim: async () => undefined,
     lrange: async () => [],
+    pipeline: () => {
+      throw new Error('unused');
+    },
   };
 }
 

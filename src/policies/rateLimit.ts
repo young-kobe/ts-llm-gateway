@@ -3,10 +3,8 @@ import { STORE_OP_TIMEOUT_MS, withDeadline, type DistributedLimiter } from '../s
 /**
  * Token-bucket rate limiter, one bucket per key (API key / route).
  *
- * This is the gateway's request-admission control, the direct analogue of the
- * Kinesis shard-polling backpressure that gated ingestion in RTSS: a steady
- * refill rate with a burst allowance, and a clean "back off for N ms" signal
- * when the caller outruns it.
+ * The gateway's request-admission control: a steady refill rate with a burst
+ * allowance, and a clean "back off for N ms" signal when the caller outruns it.
  *
  * Two backends implement the async `Limiter` interface: an in-process
  * `RateLimiter` (per-instance) and a `RedisRateLimiter` backed by a shared,

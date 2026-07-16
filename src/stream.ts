@@ -12,8 +12,8 @@ export type StreamEvent =
 /**
  * Streaming orchestration. Mirrors `handleChat` but yields token deltas as they
  * arrive, and threads `signal` into the upstream call so a client disconnect
- * cancels the provider request, the direct analogue of RTSS shard-consumer
- * cancellation tokens tearing down in-flight work.
+ * cancels the provider request, tearing down in-flight work instead of paying for
+ * tokens nobody will read.
  *
  * Scope note: streaming serves the primary provider only. Retry/backoff and
  * cross-provider failover apply to the non-streaming path (`handleChat`); failing

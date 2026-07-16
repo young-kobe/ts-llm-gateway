@@ -157,27 +157,36 @@ export class RedisMetrics implements MetricsSink {
   }
 
   reject(reason: RejectReason): void {
-    this.bg(this.redis.hincrby(COUNTERS_KEY, 'requests', 1));
-    this.bg(this.redis.hincrby(COUNTERS_KEY, `reject_${reason}`, 1));
+    this.bg(
+      this.redis
+        .pipeline()
+        .hincrby(COUNTERS_KEY, 'requests', 1)
+        .hincrby(COUNTERS_KEY, `reject_${reason}`, 1)
+        .exec(),
+    );
   }
 
   error(): void {
-    this.bg(this.redis.hincrby(COUNTERS_KEY, 'requests', 1));
-    this.bg(this.redis.hincrby(COUNTERS_KEY, 'errors', 1));
+    this.bg(this.redis.pipeline().hincrby(COUNTERS_KEY, 'requests', 1).hincrby(COUNTERS_KEY, 'errors', 1).exec());
   }
 
   success(event: SuccessEvent): void {
-    this.bg(this.redis.hincrby(COUNTERS_KEY, 'requests', 1));
-    this.bg(this.redis.hincrby(COUNTERS_KEY, 'success', 1));
-    this.bg(this.redis.hincrby(COUNTERS_KEY, `provider_${event.provider}`, 1));
-    this.bg(this.redis.hincrby(COUNTERS_KEY, event.cached ? 'cache_hits' : 'cache_misses', 1));
-    if (event.failedOver) this.bg(this.redis.hincrby(COUNTERS_KEY, 'failovers', 1));
-    if (event.inputTokens) this.bg(this.redis.hincrby(COUNTERS_KEY, 'input_tokens', event.inputTokens));
-    if (event.outputTokens) this.bg(this.redis.hincrby(COUNTERS_KEY, 'output_tokens', event.outputTokens));
+    // One pipeline -> one round-trip for all of this request's counter writes.
+    const p = this.redis.pipeline();
+    p.hincrby(COUNTERS_KEY, 'requests', 1);
+    p.hincrby(COUNTERS_KEY, 'success', 1);
+    p.hincrby(COUNTERS_KEY, `provider_${event.provider}`, 1);
+    p.hincrby(COUNTERS_KEY, event.cached ? 'cache_hits' : 'cache_misses', 1);
+    if (event.failedOver) p.hincrby(COUNTERS_KEY, 'failovers', 1);
+    if (event.inputTokens) p.hincrby(COUNTERS_KEY, 'input_tokens', event.inputTokens);
+    if (event.outputTokens) p.hincrby(COUNTERS_KEY, 'output_tokens', event.outputTokens);
     if (event.latencyMs !== undefined) {
-      const ms = Math.round(event.latencyMs);
-      this.bg(this.redis.lpush(LATENCY_KEY, ms).then(() => this.redis.ltrim(LATENCY_KEY, 0, LATENCY_SAMPLES - 1)));
+      // lpush then ltrim in the same batch, so the sample list stays bounded and the
+      // trim can never run without its push (order within a pipeline is preserved).
+      p.lpush(LATENCY_KEY, Math.round(event.latencyMs));
+      p.ltrim(LATENCY_KEY, 0, LATENCY_SAMPLES - 1);
     }
+    this.bg(p.exec());
   }
 
   async snapshot(): Promise<StatsSnapshot> {

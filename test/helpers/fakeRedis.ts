@@ -1,4 +1,4 @@
-import type { RedisLike } from '../../src/store/redis.js';
+import type { RedisLike, RedisPipeline } from '../../src/store/redis.js';
 
 /**
  * In-memory stand-in for the Upstash Redis client, implementing only the methods
@@ -49,5 +49,40 @@ export class FakeRedis implements RedisLike {
   async lrange(key: string, start: number, stop: number): Promise<string[]> {
     const list = this.lists.get(key) ?? [];
     return list.slice(start, stop === -1 ? undefined : stop + 1);
+  }
+
+  pipeline(): RedisPipeline {
+    return new FakePipeline(this);
+  }
+}
+
+/**
+ * Collects queued commands and applies them in order on `exec`, mirroring how a real
+ * Upstash pipeline batches writes (order-preserving, executed as one unit for us).
+ */
+class FakePipeline implements RedisPipeline {
+  private readonly ops: Array<() => Promise<unknown>> = [];
+
+  constructor(private readonly redis: FakeRedis) {}
+
+  hincrby(key: string, field: string, increment: number): RedisPipeline {
+    this.ops.push(() => this.redis.hincrby(key, field, increment));
+    return this;
+  }
+
+  lpush(key: string, ...values: (string | number)[]): RedisPipeline {
+    this.ops.push(() => this.redis.lpush(key, ...values));
+    return this;
+  }
+
+  ltrim(key: string, start: number, stop: number): RedisPipeline {
+    this.ops.push(() => this.redis.ltrim(key, start, stop));
+    return this;
+  }
+
+  async exec(): Promise<unknown[]> {
+    const results: unknown[] = [];
+    for (const op of this.ops) results.push(await op());
+    return results;
   }
 }

@@ -1,11 +1,9 @@
 /**
  * Retry with exponential backoff, then failover across an ordered list of steps.
  *
- * The RTSS bridge: Kinesis throttling was handled with bounded exponential
- * backoff, and a stuck shard consumer failed over to a healthy one. Here each
- * "step" is a (provider, model) target; the primary is retried up to
- * `maxAttempts` times with growing delays, and if it stays down the next step
- * (the failover provider) takes over.
+ * Each "step" is a (provider, model) target: the primary is retried up to
+ * `maxAttempts` times with growing (optionally jittered) delays, and if it stays
+ * down the next step (the failover provider) takes over.
  *
  * `sleep` is injectable so tests assert the backoff schedule without real waits.
  */
@@ -19,6 +17,14 @@ export interface RetryOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Whether an error is worth retrying the SAME step. Defaults to always true. */
   isRetryable?: (err: unknown) => boolean;
+  /**
+   * Spread each backoff over [delay/2, delay] to avoid a synchronized retry storm
+   * (a "thundering herd" where many clients that failed together retry in lockstep).
+   * Off by default so the deterministic schedule is easy to test.
+   */
+  jitter?: boolean;
+  /** Injectable randomness in [0, 1) for jitter. Defaults to `Math.random`. */
+  random?: () => number;
   /** Observability hook fired before each backoff wait. */
   onRetry?: (info: { stepIndex: number; attempt: number; delayMs: number; error: unknown }) => void;
 }
@@ -36,6 +42,12 @@ const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => set
 /** Backoff for a given 1-based attempt: base * 2^(attempt-1), capped at maxDelayMs. */
 export function backoffDelay(attempt: number, baseDelayMs: number, maxDelayMs: number): number {
   return Math.min(maxDelayMs, baseDelayMs * 2 ** (attempt - 1));
+}
+
+/** Equal-jitter spread of a delay into [delay/2, delay], rounded to whole ms. */
+function jittered(delay: number, random: () => number): number {
+  const half = delay / 2;
+  return Math.round(half + random() * half);
 }
 
 /**
@@ -69,7 +81,8 @@ export async function withRetryAndFailover<S, T>(
         if (!isRetryable(err)) break;
         // Back off only if another attempt on THIS step remains.
         if (attempt < options.maxAttempts) {
-          const delayMs = backoffDelay(attempt, options.baseDelayMs, options.maxDelayMs);
+          const base = backoffDelay(attempt, options.baseDelayMs, options.maxDelayMs);
+          const delayMs = options.jitter ? jittered(base, options.random ?? Math.random) : base;
           options.onRetry?.({ stepIndex, attempt, delayMs, error: err });
           await sleep(delayMs);
         }

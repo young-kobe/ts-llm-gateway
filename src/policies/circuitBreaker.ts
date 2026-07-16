@@ -23,10 +23,8 @@ interface Entry {
  * skip it (fail fast to the next provider) instead of paying retries + backoff +
  * timeout on a provider that is already known to be down. After `cooldownMs` a
  * single HALF-OPEN probe is allowed: success CLOSES the circuit, another failure
- * re-OPENS it for a fresh cooldown.
- *
- * The RTSS bridge: an unhealthy downstream dependency was quarantined (stop calling
- * it) and health-probed on an interval rather than hammered on every request.
+ * re-OPENS it for a fresh cooldown. (The standard quarantine-and-probe pattern for
+ * an unhealthy dependency, rather than hammering it on every request.)
  *
  * State is in-memory and per-instance BY DESIGN: each serverless instance protects
  * its own requests and probes recovery independently. Unlike the cache or rate

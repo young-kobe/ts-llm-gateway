@@ -11,6 +11,7 @@ export interface Config {
     maxAttempts: number;
     baseDelayMs: number;
     maxDelayMs: number;
+    jitter: boolean;
   };
   /** Per-provider-call deadline in ms; keep below the serverless function's max duration. */
   providerTimeoutMs: number;
@@ -76,6 +77,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       maxAttempts: num(env.RETRY_MAX_ATTEMPTS, 2),
       baseDelayMs: num(env.RETRY_BASE_DELAY_MS, 200),
       maxDelayMs: num(env.RETRY_MAX_DELAY_MS, 2000),
+      jitter: true, // spread real backoffs to avoid synchronized retry storms
     },
     providerTimeoutMs: num(env.PROVIDER_TIMEOUT_MS, 20_000),
     circuitBreaker: {
