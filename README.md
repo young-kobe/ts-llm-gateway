@@ -14,14 +14,16 @@ abstraction, [`@ai-sdk/amazon-bedrock`](https://www.npmjs.com/package/@ai-sdk/am
 (primary) and [`@ai-sdk/openai`](https://www.npmjs.com/package/@ai-sdk/openai) (failover) as
 providers, and [Hono](https://hono.dev) for the HTTP layer.
 
-> **Status:** feature-complete. Unified `POST /v1/chat` routes to both providers behind one
-> interface, wrapped in three production policies (per-key **rate limiting**, **retry with
-> exponential backoff + cross-provider failover**, and an **LRU response cache**), plus **SSE
-> token streaming with client-driven cancellation**, abuse guards (API-key auth, IP-based
-> rate limiting, request caps), and a **live stats dashboard** (`/stats`). State (cache, rate
-> limiter, metrics) runs behind a **pluggable backend**: in-memory by default, or global + durable
-> via Upstash Redis when configured. 53 tests (unit + HTTP integration) run without live keys; a
-> benchmark harness measures the cache and failover paths. Deploy config for Vercel is included.
+> **Status:** feature-complete. A native `POST /v1/chat` and an **OpenAI-compatible
+> `POST /v1/chat/completions`** (drop-in for the OpenAI SDK, with `provider/model` routing) both
+> route to both providers behind one interface, wrapped in three production policies (per-key
+> **rate limiting**, **retry with exponential backoff + cross-provider failover**, and an **LRU
+> response cache**), plus **SSE token streaming with client-driven cancellation**, abuse guards
+> (API-key auth, IP-based rate limiting, request caps), and a **live stats dashboard** (`/stats`).
+> State (cache, rate limiter, metrics) runs behind a **pluggable backend**: in-memory by default,
+> or global + durable via Upstash Redis when configured. 66 tests (unit + HTTP integration) run
+> without live keys; a benchmark harness measures the cache and failover paths. Deploy config for
+> Vercel is included.
 
 ## Why this exists
 
@@ -89,6 +91,43 @@ data: {"type":"done","provider":"bedrock","model":"...","cached":false,"usage":{
 If the client disconnects, the gateway aborts the upstream provider call rather than letting it
 run to completion. That is the RTSS cancellation-token bridge. (Streaming serves the primary
 provider; retry/failover apply to the non-streaming path.)
+
+### `POST /v1/chat/completions`
+
+OpenAI-compatible endpoint: it accepts the OpenAI Chat Completions request and returns the OpenAI
+response shape, so an existing OpenAI SDK client can point straight at the gateway by changing only
+its `baseURL`. It reuses the same core as `/v1/chat` (cache, retry, failover, timeout, metrics).
+
+Routing is driven by a `provider/model` prefix on the `model` field:
+
+```jsonc
+// request (OpenAI wire format)
+{
+  "model": "openai/gpt-4o-mini",   // "<provider>/<model>"; bare id → DEFAULT_PROVIDER
+  "messages": [{ "role": "user", "content": "Hello" }],
+  "temperature": 0.7,              // optional
+  "max_completion_tokens": 512     // optional (legacy "max_tokens" also accepted)
+}
+```
+
+```jsonc
+// response (OpenAI chat.completion)
+{
+  "id": "chatcmpl-...",
+  "object": "chat.completion",
+  "created": 1752600000,
+  "model": "openai/gpt-4o-mini",   // echoes the requested id
+  "choices": [
+    { "index": 0, "message": { "role": "assistant", "content": "Hello! ..." }, "finish_reason": "stop" }
+  ],
+  "usage": { "prompt_tokens": 7, "completion_tokens": 11, "total_tokens": 18 }
+}
+```
+
+Only a *known* provider prefix (`openai/`, `bedrock/`) is stripped; a bare id or a Bedrock ARN
+(which itself contains `/`) is passed through unchanged. Add `"stream": true` for an OpenAI SSE
+stream: `chat.completion.chunk` frames (opening `role` delta, then `content` deltas, then a `stop`
+finish) terminated by `data: [DONE]`. The same auth, rate-limit, and request caps apply.
 
 ### `GET /health`
 
