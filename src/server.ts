@@ -1,8 +1,10 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
+import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import type { ModelMessage } from 'ai';
 import { handleChat, UnknownProviderError, type GatewayDeps } from './gateway';
+import { streamChat } from './stream';
 import { buildDefaultRegistry } from './providers';
 import { loadConfig } from './config';
 import { RateLimiter } from './policies/rateLimit';
@@ -21,6 +23,8 @@ const chatRequestSchema = z.object({
   messages: z.array(messageSchema).min(1),
   temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().int().positive().optional(),
+  /** When true, respond with an SSE token stream instead of a single JSON body. */
+  stream: z.boolean().optional(),
 });
 
 /** Injectable overrides — tests pass a mock registry and/or a tight rate limiter. */
@@ -71,13 +75,26 @@ export function createServer(overrides?: ServerOverrides): Hono {
       return c.json({ error: 'invalid_request', issues: parsed.error.issues }, 400);
     }
 
+    // `messages` is validated to plain-text turns above; the cast bridges the
+    // narrowed literal shape to the SDK's broader ModelMessage union.
+    const chatReq = { ...parsed.data, messages: parsed.data.messages as ModelMessage[] };
+
+    if (parsed.data.stream) {
+      return streamSSE(c, async (sse) => {
+        // Bridge client disconnect → upstream cancellation: when Hono aborts the
+        // response stream, abort the controller feeding the provider call.
+        const controller = new AbortController();
+        sse.onAbort(() => controller.abort());
+
+        for await (const event of streamChat(chatReq, deps, controller.signal)) {
+          await sse.writeSSE({ event: event.type, data: JSON.stringify(event) });
+          if (event.type === 'done' || event.type === 'error') break;
+        }
+      });
+    }
+
     try {
-      // `messages` is validated to plain-text turns above; the cast bridges the
-      // narrowed literal shape to the SDK's broader ModelMessage union.
-      const result = await handleChat(
-        { ...parsed.data, messages: parsed.data.messages as ModelMessage[] },
-        deps,
-      );
+      const result = await handleChat(chatReq, deps);
       return c.json(result);
     } catch (err) {
       if (err instanceof UnknownProviderError) {
