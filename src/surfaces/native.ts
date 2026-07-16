@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { Handler } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import type { ModelMessage } from 'ai';
@@ -31,14 +31,15 @@ function buildSchema(security: SecurityConfig) {
 }
 
 /**
- * The native surface: the gateway's own request/response shape at POST /v1/chat.
- * Its wire format is (near) the canonical ChatRequest itself, so it needs no
- * translation layer, unlike the OpenAI-compatible surface.
+ * The native surface: the gateway's own request/response shape. Returns the route
+ * handler; server.ts owns the path (POST /v1/chat). Its wire format is (near) the
+ * canonical ChatRequest itself, so it needs no translation layer, unlike the
+ * OpenAI-compatible surface.
  */
-export function registerNativeChat(app: Hono, ctx: ApiContext): void {
+export function nativeChatHandler(ctx: ApiContext): Handler {
   const schema = buildSchema(ctx.security);
 
-  app.post('/v1/chat', async (c) => {
+  return async (c) => {
     const denied = await admit(ctx, c);
     if (denied) return denied;
 
@@ -92,5 +93,5 @@ export function registerNativeChat(app: Hono, ctx: ApiContext): void {
       const e = classifyError(ctx, err);
       return c.json(e.provider ? { error: e.code, provider: e.provider } : { error: e.code, message: e.message }, e.status);
     }
-  });
+  };
 }

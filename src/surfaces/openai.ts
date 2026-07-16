@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { Handler } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { handleChat } from '../gateway.js';
 import { streamChat } from '../stream.js';
@@ -22,16 +22,17 @@ import {
 } from './openai-format.js';
 
 /**
- * OpenAI-compatible surface at POST /v1/chat/completions: accepts the OpenAI Chat
- * Completions request/response shape (so the OpenAI SDK can point straight at the
- * gateway by changing only its baseURL) and routes on a `provider/model` prefix.
- * It reuses the same admission + accounting pipeline and gateway core as the
- * native surface; only the wire format differs.
+ * OpenAI-compatible surface: accepts the OpenAI Chat Completions request/response
+ * shape (so the OpenAI SDK can point straight at the gateway by changing only its
+ * baseURL) and routes on a `provider/model` prefix. Returns the route handler;
+ * server.ts owns the path (POST /v1/chat/completions). It reuses the same
+ * admission + accounting pipeline and gateway core as the native surface; only the
+ * wire format differs.
  */
-export function registerOpenAIChat(app: Hono, ctx: ApiContext): void {
+export function openAIChatHandler(ctx: ApiContext): Handler {
   const schema = buildOpenAIRequestSchema(ctx.security);
 
-  app.post('/v1/chat/completions', async (c) => {
+  return async (c) => {
     const denied = await admit(ctx, c);
     if (denied) return denied;
 
@@ -91,5 +92,5 @@ export function registerOpenAIChat(app: Hono, ctx: ApiContext): void {
       const e = classifyError(ctx, err);
       return c.json({ error: { message: e.message } }, e.status);
     }
-  });
+  };
 }

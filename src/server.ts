@@ -1,18 +1,19 @@
 import { Hono } from 'hono';
 import { loadConfig } from './config.js';
 import { buildRuntime, type ServerOverrides } from './runtime.js';
-import { registerNativeChat } from './surfaces/native.js';
-import { registerOpenAIChat } from './surfaces/openai.js';
+import { nativeChatHandler } from './surfaces/native.js';
+import { openAIChatHandler } from './surfaces/openai.js';
 
 export type { ServerOverrides };
 
 /**
  * Assemble the Hono app. This is the composition overview: build the concrete
- * runtime from config (in-memory or Redis), then mount the system routes and each
- * chat "surface" (an inbound API dialect). Every surface translates to the same
- * canonical ChatRequest and shares one admission + accounting pipeline and the
- * same gateway core; they differ only in wire format. Dependencies are injectable
- * so tests run against a mock registry with no live keys.
+ * runtime from config (in-memory or Redis), then declare the full route table
+ * here. The chat "surfaces" (inbound API dialects) are handler factories, so every
+ * endpoint and path is visible in this one place. Every surface translates to the
+ * same canonical ChatRequest and shares one admission + accounting pipeline and
+ * the same gateway core; they differ only in wire format. Dependencies are
+ * injectable so tests run against a mock registry with no live keys.
  */
 export function createServer(overrides?: ServerOverrides): Hono {
   const config = loadConfig();
@@ -20,14 +21,12 @@ export function createServer(overrides?: ServerOverrides): Hono {
 
   const app = new Hono();
 
-  // System routes.
+  // Route table.
   app.get('/health', (c) => c.json({ ok: true }));
   // Live counters for the dashboard. Backend is in-memory or Redis (see config).
   app.get('/stats', async (c) => c.json(await ctx.metrics.snapshot()));
-
-  // Chat surfaces: inbound dialects over one shared core.
-  registerNativeChat(app, ctx);
-  registerOpenAIChat(app, ctx);
+  app.post('/v1/chat', nativeChatHandler(ctx)); // native surface
+  app.post('/v1/chat/completions', openAIChatHandler(ctx)); // OpenAI-compatible surface (spec path)
 
   return app;
 }
