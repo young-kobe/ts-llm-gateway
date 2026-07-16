@@ -100,25 +100,33 @@
         <div class="tile"><div class="num" id="s-tokens">0 / 0</div><div class="label">Tokens in / out</div></div>
       </div>
       <p class="stats-note">
-        Live from <code>/stats</code>, polled every 2s. Counters are per serverless instance and
-        reset on cold start, so on Vercel you may be viewing a different instance than the one
-        serving traffic.
+        Live from <code>/stats</code>, polled every 2s. Backed by Redis when configured, so counters
+        are global and durable across serverless instances; without Redis they fall back to
+        per-instance in-memory state that resets on cold start.
       </p>
 
       <h2>Example</h2>
       <pre>curl -s https://ts-llm-gateway.vercel.app/v1/chat \
   -H 'content-type: application/json' \
   -d '{
-    "provider": "openai",
-    "model": "gpt-4o-mini",
+    "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "messages": [{ "role": "user", "content": "Hello" }]
   }'
 
-# OpenAI-compatible: same call, OpenAI wire format, provider/model routing
+# OpenAI-compatible: OpenAI wire format, routed to Bedrock via the model prefix
 curl -s https://ts-llm-gateway.vercel.app/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{
-    "model": "openai/gpt-4o-mini",
+    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "messages": [{ "role": "user", "content": "Hello" }]
+  }'
+
+# Streaming: add "stream": true and read the SSE token stream (curl -N)
+curl -sN https://ts-llm-gateway.vercel.app/v1/chat \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "stream": true,
     "messages": [{ "role": "user", "content": "Hello" }]
   }'</pre>
 
