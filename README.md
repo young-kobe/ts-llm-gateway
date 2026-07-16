@@ -50,7 +50,7 @@ Non-streaming chat completion.
 // request
 {
   "provider": "bedrock",          // optional; defaults to DEFAULT_PROVIDER
-  "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+  "model": "anthropic.claude-3-sonnet-20240229-v1:0",
   "messages": [{ "role": "user", "content": "Hello" }],
   "temperature": 0.7,             // optional
   "maxTokens": 512                // optional
@@ -61,12 +61,24 @@ Non-streaming chat completion.
 // response
 {
   "provider": "bedrock",
-  "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+  "model": "anthropic.claude-3-sonnet-20240229-v1:0",
   "text": "Hello! ...",
   "usage": { "inputTokens": 7, "outputTokens": 11 },
   "cached": false          // true when served from the response cache
 }
 ```
+
+Known-good Bedrock model ids (enable them first in Bedrock → Model access, per region):
+
+| Model id | Notes |
+|---|---|
+| `anthropic.claude-3-haiku-20240307-v1:0` | Direct invoke, cheapest; good for a smoke test |
+| `anthropic.claude-3-sonnet-20240229-v1:0` | Direct invoke (Claude 3 Sonnet) |
+| `us.anthropic.claude-3-7-sonnet-20250219-v1:0` | Needs the `us.` cross-region **inference profile** |
+
+Most newer Claude models are invocable only through an inference profile (the `us.` prefix). If a
+bare id returns `ValidationException ... inference profile`, switch to the `us.`-prefixed id. Copy
+the exact id from Bedrock → Model catalog.
 
 `provider`/`model` reflect who *actually* served the response, so after a failover they name the
 secondary. A `429` (with a `Retry-After` header) means the caller's rate-limit bucket is empty.
