@@ -16,12 +16,13 @@ providers, and [Hono](https://hono.dev) for the HTTP layer.
 
 > **Status:** feature-complete. A native `POST /v1/chat` and an **OpenAI-compatible
 > `POST /v1/chat/completions`** (drop-in for the OpenAI SDK, with `provider/model` routing) both
-> route to both providers behind one interface, wrapped in three production policies (per-key
-> **rate limiting**, **retry with exponential backoff + cross-provider failover**, and an **LRU
-> response cache**), plus **SSE token streaming with client-driven cancellation**, abuse guards
+> route to both providers behind one interface, wrapped in production policies (per-key
+> **rate limiting**, **retry with exponential backoff + cross-provider failover**, a **circuit
+> breaker** that quarantines a downed provider, a per-call **timeout**, and an **LRU response
+> cache**), plus **SSE token streaming with client-driven cancellation**, abuse guards
 > (API-key auth, IP-based rate limiting, request caps), and a **live stats dashboard** (`/stats`).
 > State (cache, rate limiter, metrics) runs behind a **pluggable backend**: in-memory by default,
-> or global + durable via Upstash Redis when configured. 66 tests (unit + HTTP integration) run
+> or global + durable via Upstash Redis when configured. 77 tests (unit + HTTP integration) run
 > without live keys; a benchmark harness measures the cache and failover paths. Deploy config for
 > Vercel is included.
 
@@ -34,6 +35,7 @@ Every feature here maps directly onto a piece of a production real-time streamin
 |---|---|
 | Kinesis shard-polling backpressure / request admission | **Rate limiting**: token-bucket per API key/route |
 | Retry/backoff on Kinesis throttling | **Retry + exponential backoff**, then **failover** to the secondary provider |
+| Quarantining an unhealthy dependency and health-probing it | **Circuit breaker**: skip a downed provider, half-open probe to recover |
 | Shard-consumer cancellation tokens | **Streaming abort**: client disconnect cancels the upstream call |
 | Composite routing keys | **Provider/model routing** |
 | SignalR streaming fan-out to dashboards | **SSE token streaming** to the client |
@@ -154,14 +156,16 @@ flowchart TD
     VAL -- no --> E400[400 invalid_request]
     VAL -- yes --> CACHE{cache hit?}
     CACHE -- hit --> HIT[return cached<br/>no provider call]
-    CACHE -- miss --> RETRY[retry + backoff]
+    CACHE -- miss --> BREAK{healthy provider?<br/>circuit breaker}
+    BREAK -- all circuits open --> E503[503 circuit_open]
+    BREAK -- yes --> RETRY[retry + backoff]
     RETRY -- provider down --> FAIL[failover to next provider]
     RETRY --> GEN[AI SDK generateText / streamText]
     FAIL --> GEN
     GEN --> P[(Bedrock / OpenAI)]
     GEN --> STORE[cache store] --> RESP([response / SSE stream])
 
-    subgraph "server.ts"
+    subgraph "surfaces (admission + validation)"
         BODY
         RL
         AUTH
@@ -169,6 +173,7 @@ flowchart TD
     end
     subgraph "gateway.ts + stream.ts"
         CACHE
+        BREAK
         RETRY
         FAIL
         GEN
@@ -194,6 +199,12 @@ the order above. All use injectable clocks / sleep so behavior is tested determi
 - **`timeout.ts`**: a per-provider-call deadline (`PROVIDER_TIMEOUT_MS`). A stalled call becomes a
   fast, retryable failure that triggers failover, rather than hanging until the function's max
   duration. Applies to the non-streaming path.
+- **`circuitBreaker.ts`**: after `CIRCUIT_FAILURE_THRESHOLD` consecutive failures a provider's
+  circuit opens and the failover chain skips it, so requests fail fast to a healthy provider
+  instead of paying retries + backoff + timeout on one that is already down. After
+  `CIRCUIT_COOLDOWN_MS` a single half-open probe closes it on success or re-opens it on failure.
+  If every provider's circuit is open, the request returns `503`. State is per-instance by design
+  (each instance quarantines and probes independently), unlike the shared cache / rate limiter.
 - **`cache.ts`**: LRU cache (optional TTL) keyed on a SHA-256 of the request identity
   (resolved provider + model + messages + params). A hit returns without any provider call.
 

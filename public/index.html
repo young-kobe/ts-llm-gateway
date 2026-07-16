@@ -128,6 +128,7 @@ curl -s https://ts-llm-gateway.vercel.app/v1/chat/completions \
         <tbody>
           <tr><td>Shard-polling backpressure / admission</td><td>Token-bucket rate limiting</td></tr>
           <tr><td>Retry/backoff on throttling</td><td>Exponential backoff → provider failover</td></tr>
+          <tr><td>Quarantine an unhealthy dependency, probe to recover</td><td>Circuit breaker over the failover chain</td></tr>
           <tr><td>Consumer cancellation tokens</td><td>Client disconnect cancels the upstream call</td></tr>
           <tr><td>Streaming fan-out</td><td>SSE token streaming</td></tr>
         </tbody>

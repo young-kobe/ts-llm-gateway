@@ -1,6 +1,6 @@
 import type { Context } from 'hono';
 import { z } from 'zod';
-import { UnknownProviderError, type GatewayDeps } from '../gateway.js';
+import { AllProvidersUnavailableError, UnknownProviderError, type GatewayDeps } from '../gateway.js';
 import type { Limiter } from '../policies/rateLimit.js';
 import type { MetricsSink } from '../metrics.js';
 import type { SecurityConfig } from '../config.js';
@@ -133,10 +133,18 @@ export function recordSuccess(
 export function classifyError(
   ctx: ApiContext,
   err: unknown,
-): { status: 400 | 502; code: 'unknown_provider' | 'upstream_error'; message: string; provider?: string } {
+): {
+  status: 400 | 502 | 503;
+  code: 'unknown_provider' | 'upstream_error' | 'circuit_open';
+  message: string;
+  provider?: string;
+} {
   ctx.metrics.error();
   if (err instanceof UnknownProviderError) {
     return { status: 400, code: 'unknown_provider', message: `unknown_provider: ${err.provider}`, provider: err.provider };
+  }
+  if (err instanceof AllProvidersUnavailableError) {
+    return { status: 503, code: 'circuit_open', message: 'all providers temporarily unavailable' };
   }
   return { status: 502, code: 'upstream_error', message: err instanceof Error ? err.message : 'upstream provider error' };
 }

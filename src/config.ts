@@ -14,6 +14,12 @@ export interface Config {
   };
   /** Per-provider-call deadline in ms; keep below the serverless function's max duration. */
   providerTimeoutMs: number;
+  circuitBreaker: {
+    /** Consecutive provider failures before its circuit opens (skipping it). */
+    failureThreshold: number;
+    /** How long a provider's circuit stays open before a half-open probe (ms). */
+    cooldownMs: number;
+  };
   cache: {
     maxEntries: number;
     /** undefined → entries never expire. */
@@ -72,6 +78,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       maxDelayMs: num(env.RETRY_MAX_DELAY_MS, 2000),
     },
     providerTimeoutMs: num(env.PROVIDER_TIMEOUT_MS, 20_000),
+    circuitBreaker: {
+      failureThreshold: num(env.CIRCUIT_FAILURE_THRESHOLD, 5),
+      cooldownMs: num(env.CIRCUIT_COOLDOWN_MS, 30_000),
+    },
     cache: {
       maxEntries: num(env.CACHE_MAX_ENTRIES, 500),
       ttlMs: env.CACHE_TTL_MS ? num(env.CACHE_TTL_MS, 60_000) : undefined,
