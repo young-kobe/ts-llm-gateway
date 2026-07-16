@@ -1,10 +1,27 @@
-import { generateText } from 'ai';
+import { APICallError, generateText } from 'ai';
 import type { ChatRequest, ChatResponse, ProviderName } from './types.js';
 import type { ProviderRegistry } from './providers/index.js';
 import { cacheKey, type ResponseCache } from './policies/cache.js';
 import { withRetryAndFailover, type RetryOptions } from './policies/retry.js';
-import { withTimeout } from './policies/timeout.js';
+import { withTimeout, TimeoutError } from './policies/timeout.js';
 import type { CircuitBreaker } from './policies/circuitBreaker.js';
+
+/**
+ * Whether a provider error is worth retrying (same provider) or failing over (next
+ * provider). A deterministic 4xx (a bad model id, a validation or auth error) will
+ * fail identically on every attempt AND on every other provider, so retrying it only
+ * wastes latency and, worse, doubles the spend by failing it over. Only transient
+ * errors are retryable:
+ *   - our own TimeoutError is transient by definition (the call ran out of time);
+ *   - the AI SDK sets `isRetryable` correctly (false for 4xx except 408/409/429,
+ *     true for throttling / 5xx / network errors).
+ * Any other (unclassified) error stays retryable, preserving the prior default.
+ */
+export function isRetryableError(err: unknown): boolean {
+  if (err instanceof TimeoutError) return true;
+  if (APICallError.isInstance(err)) return err.isRetryable === true;
+  return true;
+}
 
 /** Everything the gateway core needs, injected so it stays testable without live keys. */
 export interface GatewayDeps {
@@ -107,7 +124,10 @@ export async function handleChat(req: ChatRequest, deps: GatewayDeps): Promise<C
   const available = breaker ? chain.filter((step) => breaker.allow(step.provider)) : chain;
   if (available.length === 0) throw new AllProvidersUnavailableError();
 
-  const outcome = await withRetryAndFailover(available, run, deps.retry).catch((err: unknown) => {
+  // Don't retry/fail over deterministic errors (a bad model id fails the same way
+  // everywhere); an explicit deps.retry.isRetryable still wins if provided.
+  const retry: RetryOptions = { ...deps.retry, isRetryable: deps.retry.isRetryable ?? isRetryableError };
+  const outcome = await withRetryAndFailover(available, run, retry).catch((err: unknown) => {
     // Every attempted provider failed: record a failure for each.
     if (breaker) for (const step of available) breaker.recordFailure(step.provider);
     throw err;
