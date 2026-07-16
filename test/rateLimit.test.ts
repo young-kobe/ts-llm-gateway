@@ -63,6 +63,9 @@ describe('RateLimiter (in-memory token bucket)', () => {
 });
 
 describe('RedisRateLimiter (distributed adapter)', () => {
+  /** A never-consulted fallback for tests where the distributed limiter answers. */
+  const unusedFallback = () => new RateLimiter({ capacity: 100, refillPerSecond: 1, now: () => 0 });
+
   it('maps a distributed limiter result into the gateway shape', async () => {
     const responses: Array<{ success: boolean; remaining: number; reset: number }> = [
       { success: true, remaining: 4, reset: 6_000 },
@@ -71,7 +74,7 @@ describe('RedisRateLimiter (distributed adapter)', () => {
     const fake: DistributedLimiter = {
       limit: async () => responses.shift()!,
     };
-    const limiter = new RedisRateLimiter(fake, () => 5_500);
+    const limiter = new RedisRateLimiter(fake, unusedFallback(), () => 5_500);
 
     const ok = await limiter.check('k');
     expect(ok).toEqual({ allowed: true, remaining: 4, retryAfterMs: 0 });
@@ -81,22 +84,26 @@ describe('RedisRateLimiter (distributed adapter)', () => {
     expect(denied).toEqual({ allowed: false, remaining: 0, retryAfterMs: 500 });
   });
 
-  it('fails OPEN (allows) when the shared limiter hangs, instead of blocking the request', async () => {
+  it('falls back to the per-instance limiter (not unlimited) when the shared limiter hangs', async () => {
     // A limiter that never resolves, standing in for an unreachable/slow Redis.
     const hanging: DistributedLimiter = { limit: () => new Promise(() => {}) };
-    const limiter = new RedisRateLimiter(hanging, () => 0, 20); // 20ms deadline
+    const fallback = new RateLimiter({ capacity: 1, refillPerSecond: 1, now: () => 0 });
+    const limiter = new RedisRateLimiter(hanging, fallback, () => 0, 20); // 20ms deadline
 
-    const result = await limiter.check('k');
-    expect(result.allowed).toBe(true); // degraded to allow, did not hang
+    expect((await limiter.check('k')).allowed).toBe(true); // one fallback token
+    expect((await limiter.check('k')).allowed).toBe(false); // fallback still enforces per instance
   });
 
-  it('fails OPEN (allows) when the shared limiter throws', async () => {
+  it('falls back to the per-instance limiter when the shared limiter throws', async () => {
     const throwing: DistributedLimiter = {
       limit: async () => {
         throw new Error('redis unreachable');
       },
     };
-    const limiter = new RedisRateLimiter(throwing, () => 0, 20);
+    const fallback = new RateLimiter({ capacity: 1, refillPerSecond: 1, now: () => 0 });
+    const limiter = new RedisRateLimiter(throwing, fallback, () => 0, 20);
+
     expect((await limiter.check('k')).allowed).toBe(true);
+    expect((await limiter.check('k')).allowed).toBe(false); // not unconditionally allowed
   });
 });

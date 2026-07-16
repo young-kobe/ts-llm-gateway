@@ -244,9 +244,26 @@ cache, and shared counters). Unset, they fall back to **in-process, per-instance
 resets on cold start. The gateway degrades gracefully either way; nothing else changes.
 
 The request-path Redis calls are also bounded and **fail soft**: a slow or unreachable store can
-never hang a request. Each op has a short deadline, after which the rate limiter **fails open**
-(admits the request) and the cache degrades to a **miss**, so a Redis outage costs latency and
-enforcement, not availability. Metric writes are fire-and-forget for the same reason.
+never hang a request. Each op has a short deadline, after which the rate limiter **falls back to
+per-instance in-memory limiting** (a looser bound, never unlimited) and the cache degrades to a
+**miss**. So a Redis outage costs a bit of latency and the *global* rate limit (each instance still
+enforces its own bucket), not availability. Metric writes are fire-and-forget for the same reason.
+
+**Which guards survive a Redis outage.** Only the rate limiter is Redis-backed, and it degrades (to
+per-instance limiting) rather than failing. Everything that bounds *cost* is in-memory and keeps
+enforcing regardless of Redis:
+
+| Guard | Backing | During a Redis outage |
+|---|---|---|
+| API-key auth | in-memory allowlist (config) | fully enforced |
+| Request caps (maxTokens clamp, message/content/body size, model allowlist) | in-memory (config + zod) | fully enforced |
+| Per-provider-call timeout | in-memory (`setTimeout` + `AbortController`) | fully enforced |
+| Circuit breaker | in-memory, per-instance | fully enforced |
+| Rate limit | Redis (global) | degrades to per-instance in-memory |
+
+So the realistic worst case is elevated request *volume* from a caller who'd otherwise be throttled,
+never unbounded per-request cost or an auth bypass: the `maxTokens` clamp and model allowlist still
+cap what any single request can spend.
 
 Regardless of backend, set the two provider-side backstops so abuse can't run up an unbounded bill:
 
