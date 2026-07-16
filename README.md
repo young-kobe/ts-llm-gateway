@@ -195,3 +195,7 @@ vercel --prod          # deploy production, capture the live URL
 ```
 
 - Live URL: https://ts-llm-gateway.vercel.app/
+
+## License
+
+[MIT](./LICENSE) © Kobe Young
