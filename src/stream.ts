@@ -34,7 +34,7 @@ export async function* streamChat(
   // Cache hit: replay the stored completion as a single delta, no provider call.
   const key = deps.cache ? cacheKey(req, primary) : undefined;
   if (key && deps.cache) {
-    const hit = deps.cache.get(key);
+    const hit = await deps.cache.get(key);
     if (hit) {
       yield { type: 'delta', text: hit.text };
       yield { type: 'done', provider: hit.provider, model: hit.model, cached: true, usage: hit.usage };
@@ -65,7 +65,7 @@ export async function* streamChat(
       usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
       cached: false,
     };
-    if (key && deps.cache) deps.cache.set(key, response);
+    if (key && deps.cache) await deps.cache.set(key, response);
     yield { type: 'done', provider: primary, model: req.model, cached: false, usage: response.usage };
   } catch (err) {
     // On abort, `result.usage` may still be pending and reject later, so mark it

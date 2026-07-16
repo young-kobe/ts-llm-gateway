@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ResponseCache, cacheKey } from '../src/policies/cache.js';
 import type { ChatRequest, ChatResponse } from '../src/types.js';
+import { FakeRedis } from './helpers/fakeRedis.js';
 
 function req(overrides: Partial<ChatRequest> = {}): ChatRequest {
   return {
@@ -34,35 +35,51 @@ describe('cacheKey', () => {
   });
 });
 
-describe('ResponseCache', () => {
-  it('returns undefined on miss and the stored value on hit', () => {
+describe('ResponseCache (in-memory backend)', () => {
+  it('returns undefined on miss and the stored value on hit', async () => {
     const cache = new ResponseCache({ maxEntries: 10 });
-    expect(cache.get('k')).toBeUndefined();
-    cache.set('k', resp('hello'));
-    expect(cache.get('k')?.text).toBe('hello');
+    expect(await cache.get('k')).toBeUndefined();
+    await cache.set('k', resp('hello'));
+    expect((await cache.get('k'))?.text).toBe('hello');
   });
 
-  it('evicts the least-recently-used entry past capacity', () => {
+  it('evicts the least-recently-used entry past capacity', async () => {
     const cache = new ResponseCache({ maxEntries: 2 });
-    cache.set('a', resp('a'));
-    cache.set('b', resp('b'));
-    cache.get('a'); // touch 'a' so 'b' becomes least-recently-used
-    cache.set('c', resp('c')); // evicts 'b'
+    await cache.set('a', resp('a'));
+    await cache.set('b', resp('b'));
+    await cache.get('a'); // touch 'a' so 'b' becomes least-recently-used
+    await cache.set('c', resp('c')); // evicts 'b'
 
-    expect(cache.get('a')?.text).toBe('a');
-    expect(cache.get('b')).toBeUndefined();
-    expect(cache.get('c')?.text).toBe('c');
+    expect((await cache.get('a'))?.text).toBe('a');
+    expect(await cache.get('b')).toBeUndefined();
+    expect((await cache.get('c'))?.text).toBe('c');
     expect(cache.size).toBe(2);
   });
 
-  it('expires entries after their TTL', () => {
+  it('expires entries after their TTL', async () => {
     let now = 0;
     const cache = new ResponseCache({ maxEntries: 10, ttlMs: 1_000, now: () => now });
-    cache.set('k', resp('fresh'));
+    await cache.set('k', resp('fresh'));
 
     now = 999;
-    expect(cache.get('k')?.text).toBe('fresh');
+    expect((await cache.get('k'))?.text).toBe('fresh');
     now = 1_000;
-    expect(cache.get('k')).toBeUndefined(); // expired exactly at the TTL boundary
+    expect(await cache.get('k')).toBeUndefined(); // expired exactly at the TTL boundary
+  });
+});
+
+describe('ResponseCache (Redis backend)', () => {
+  it('reads and writes through the shared store instead of local memory', async () => {
+    const redis = new FakeRedis();
+    const cache = new ResponseCache({ maxEntries: 10 }, redis);
+
+    expect(await cache.get('k')).toBeUndefined();
+    await cache.set('k', resp('from-redis'));
+    expect((await cache.get('k'))?.text).toBe('from-redis');
+
+    // A second instance sharing the same store sees the entry (cross-instance durability).
+    const other = new ResponseCache({ maxEntries: 10 }, redis);
+    expect((await other.get('k'))?.text).toBe('from-redis');
+    expect(cache.size).toBe(0); // nothing kept in local memory on the Redis path
   });
 });

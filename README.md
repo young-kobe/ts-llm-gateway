@@ -18,9 +18,10 @@ providers, and [Hono](https://hono.dev) for the HTTP layer.
 > interface, wrapped in three production policies (per-key **rate limiting**, **retry with
 > exponential backoff + cross-provider failover**, and an **LRU response cache**), plus **SSE
 > token streaming with client-driven cancellation**, abuse guards (API-key auth, IP-based
-> rate limiting, request caps), and a **live stats dashboard** (`/stats`). 41 tests (unit + HTTP
-> integration) run without live keys; a benchmark harness measures the cache and failover paths.
-> Deploy config for Vercel is included.
+> rate limiting, request caps), and a **live stats dashboard** (`/stats`). State (cache, rate
+> limiter, metrics) runs behind a **pluggable backend**: in-memory by default, or global + durable
+> via Upstash Redis when configured. 44 tests (unit + HTTP integration) run without live keys; a
+> benchmark harness measures the cache and failover paths. Deploy config for Vercel is included.
 
 ## Why this exists
 
@@ -97,8 +98,8 @@ Liveness check → `{ "ok": true }`.
 
 Live counters powering the dashboard on the landing page: request/success/error totals,
 per-reason rejections, cache hit rate, failovers, per-provider served counts, token totals, and
-provider-call latency p50/p99. Counters are per-instance (see
-[Design decisions](#design-decisions--trade-offs)).
+provider-call latency p50/p99. Backed by Redis when configured (global) or in-memory otherwise
+(per-instance); see [Abuse prevention](#abuse-prevention).
 
 ## Architecture
 
@@ -170,15 +171,18 @@ A public endpoint that spends money per call needs guarding. In-code (`src/serve
 4. **Request caps**: clamps `maxTokens` to `MAX_OUTPUT_TOKENS`, caps message count / content
    length, and optionally restricts models (`ALLOWED_MODELS`). Bounds the cost of any one request.
 
-**Honest limitation on serverless:** the rate limiter and cache are in-memory, so on Vercel their
-state is *per-instance* and resets on cold start, so they don't enforce a global ceiling across
-instances. Treat them as best-effort. The durable backstops for a real deployment are:
+**State backend (durable or best-effort):** the rate limiter, cache, and metrics run behind a
+pluggable store. Set `KV_REST_API_URL` / `KV_REST_API_TOKEN` (the Vercel Marketplace Upstash
+integration injects both) and all three become
+**global and durable across serverless instances** (a distributed token bucket, a shared response
+cache, and shared counters). Unset, they fall back to **in-process, per-instance** state that
+resets on cold start. The gateway degrades gracefully either way; nothing else changes.
 
-- **Vercel Firewall / Attack Challenge Mode**: edge-level, cross-instance IP rate limiting.
-- **Provider spend caps**: OpenAI usage limits + AWS Budgets, so abuse can't run up an unbounded
-  bill even if every in-app guard is bypassed. Set these regardless.
-- A shared store (Upstash Redis / Vercel KV) if you want per-key limits and cache hits to hold
-  across instances.
+Regardless of backend, set the two provider-side backstops so abuse can't run up an unbounded bill:
+
+- **Provider spend caps**: OpenAI usage limits + AWS Budgets.
+- **Vercel Firewall / Attack Challenge Mode**: edge-level IP rate limiting, complementary to the
+  app-level limiter.
 
 ## Design decisions & trade-offs
 
@@ -192,11 +196,11 @@ The interesting part of a gateway is what you deliberately chose *not* to do.
   answer; the cost is that only verbatim repeats hit (retries, idempotent re-sends, evals, load
   tests), not paraphrases. Semantic caching would trade correctness guarantees for hit rate; not
   worth it here.
-- **In-memory cache & rate limiter are per-instance.** On Vercel's stateless, horizontally-scaled
-  functions this is best-effort, not a global ceiling (see [Abuse prevention](#abuse-prevention)).
-  Chosen because the durable path (a shared store or edge firewall) adds infra and per-request
-  latency for benefit that only materializes at real traffic. The `ResponseCache` `get`/`set` seam
-  makes a Redis-backed store a drop-in when that day comes.
+- **Pluggable state backend, in-memory by default.** The cache, rate limiter, and metrics each sit
+  behind a small interface with two implementations: in-process, and Redis-backed for a global,
+  durable view across instances. It defaults to in-memory (zero infra, correct for low traffic) and
+  upgrades to shared state purely by setting Redis env vars, degrading gracefully if they're absent.
+  The interface seam is what made this a drop-in rather than a rewrite.
 - **Rate-limit bucketing by validated-key-or-IP**, never the raw caller-supplied header, since
   otherwise rotating `x-api-key` mints a fresh bucket per request and the limit is meaningless.
 - **Streaming serves the primary provider only.** Retry/failover apply to the non-streaming path;
@@ -209,8 +213,8 @@ The interesting part of a gateway is what you deliberately chose *not* to do.
 
 Deliberately out of scope for this artifact, in rough priority order:
 
-- **Shared state** (Upstash Redis / Vercel KV) for a global rate limit, cross-instance cache hits,
-  and per-key usage quotas / billing.
+- **Per-key usage quotas / billing** on top of the shared Redis store (the store itself is built;
+  see [Abuse prevention](#abuse-prevention)).
 - **Request coalescing (single-flight)**: collapse concurrent identical in-flight requests into
   one upstream call (the cache only dedupes *sequential* repeats, not simultaneous ones).
 - **Per-call timeouts** on the provider request, feeding the retry/failover path.

@@ -1,3 +1,5 @@
+import type { DistributedLimiter } from '../store/redis.js';
+
 /**
  * Token-bucket rate limiter, one bucket per key (API key / route).
  *
@@ -6,9 +8,16 @@
  * refill rate with a burst allowance, and a clean "back off for N ms" signal
  * when the caller outruns it.
  *
- * The clock is injectable so tests drive time deterministically instead of
- * sleeping.
+ * Two backends implement the async `Limiter` interface: an in-process
+ * `RateLimiter` (per-instance) and a `RedisRateLimiter` backed by a shared,
+ * distributed token bucket (a global limit that holds across instances).
+ * The clock is injectable so tests drive time deterministically.
  */
+export interface Limiter {
+  /** Attempt to consume `cost` tokens for `key`. Non-mutating when denied. */
+  check(key: string, cost?: number): Promise<RateLimitResult>;
+}
+
 export interface RateLimitOptions {
   /** Maximum tokens a bucket can hold (the burst allowance). */
   capacity: number;
@@ -31,7 +40,7 @@ interface Bucket {
   updatedAt: number;
 }
 
-export class RateLimiter {
+export class RateLimiter implements Limiter {
   private readonly buckets = new Map<string, Bucket>();
   private readonly now: () => number;
 
@@ -39,8 +48,8 @@ export class RateLimiter {
     this.now = opts.now ?? Date.now;
   }
 
-  /** Attempt to consume `cost` tokens for `key`. Non-mutating when denied. */
-  check(key: string, cost = 1): RateLimitResult {
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async check(key: string, cost = 1): Promise<RateLimitResult> {
     const now = this.now();
     const bucket = this.buckets.get(key) ?? { tokens: this.opts.capacity, updatedAt: now };
 
@@ -61,5 +70,27 @@ export class RateLimiter {
 
     this.buckets.set(key, bucket);
     return result;
+  }
+}
+
+/**
+ * Distributed token-bucket limiter backed by a shared store (Upstash Ratelimit).
+ * Because the bucket lives in Redis, the limit is global across serverless
+ * instances rather than per-instance.
+ */
+export class RedisRateLimiter implements Limiter {
+  private readonly now: () => number;
+
+  constructor(private readonly limiter: DistributedLimiter, now: () => number = Date.now) {
+    this.now = now;
+  }
+
+  async check(key: string): Promise<RateLimitResult> {
+    const result = await this.limiter.limit(key);
+    return {
+      allowed: result.success,
+      remaining: result.remaining,
+      retryAfterMs: result.success ? 0 : Math.max(0, result.reset - this.now()),
+    };
   }
 }

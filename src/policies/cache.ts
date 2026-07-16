@@ -1,18 +1,22 @@
 import { createHash } from 'node:crypto';
 import type { ChatRequest, ChatResponse, ProviderName } from '../types.js';
+import type { RedisLike } from '../store/redis.js';
 
 /**
- * Response cache keyed on request identity, with LRU eviction and optional TTL.
+ * Response cache keyed on request identity, with optional TTL.
  *
  * A cache hit returns without ever touching a provider; that's the whole point
- * (and where the Day-3 benchmark's hit-vs-miss latency gap comes from). Identity
- * is the resolved provider + model + messages + generation params, so any change
- * that could change the completion produces a different key.
+ * (and where the benchmark's hit-vs-miss latency gap comes from). Identity is the
+ * resolved provider + model + messages + generation params, so any change that
+ * could change the completion produces a different key.
  *
- * The clock is injectable so TTL expiry is tested deterministically.
+ * Backend is pluggable: with a `RedisLike` it is a shared, durable cache that
+ * holds across serverless instances (Redis handles eviction/TTL); without one it
+ * falls back to an in-process LRU. The clock is injectable so in-memory TTL expiry
+ * is tested deterministically.
  */
 export interface CacheOptions {
-  /** Maximum entries retained; the least-recently-used entry is evicted past this. */
+  /** Maximum entries retained by the in-memory backend; LRU-evicted past this. */
   maxEntries: number;
   /** Optional time-to-live per entry, in ms. Omit for no expiry. */
   ttlMs?: number;
@@ -44,11 +48,16 @@ export class ResponseCache {
   private readonly entries = new Map<string, Entry>();
   private readonly now: () => number;
 
-  constructor(private readonly opts: CacheOptions) {
+  constructor(private readonly opts: CacheOptions, private readonly redis?: RedisLike) {
     this.now = opts.now ?? Date.now;
   }
 
-  get(key: string): ChatResponse | undefined {
+  async get(key: string): Promise<ChatResponse | undefined> {
+    if (this.redis) {
+      const value = await this.redis.get<ChatResponse>(redisKey(key));
+      return value ?? undefined;
+    }
+
     const entry = this.entries.get(key);
     if (!entry) return undefined;
 
@@ -63,7 +72,13 @@ export class ResponseCache {
     return entry.value;
   }
 
-  set(key: string, value: ChatResponse): void {
+  async set(key: string, value: ChatResponse): Promise<void> {
+    if (this.redis) {
+      // Redis handles expiry (px) and memory-pressure eviction; no manual LRU needed.
+      await this.redis.set(redisKey(key), value, this.opts.ttlMs ? { px: this.opts.ttlMs } : undefined);
+      return;
+    }
+
     if (this.entries.has(key)) this.entries.delete(key);
     const expiresAt = this.opts.ttlMs !== undefined ? this.now() + this.opts.ttlMs : Infinity;
     this.entries.set(key, { value, expiresAt });
@@ -75,7 +90,12 @@ export class ResponseCache {
     }
   }
 
+  /** In-memory entry count. Meaningful only for the in-process backend. */
   get size(): number {
     return this.entries.size;
   }
+}
+
+function redisKey(key: string): string {
+  return `cache:${key}`;
 }

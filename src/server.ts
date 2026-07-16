@@ -7,10 +7,11 @@ import { handleChat, UnknownProviderError, type GatewayDeps } from './gateway.js
 import { streamChat } from './stream.js';
 import { buildDefaultRegistry } from './providers/index.js';
 import { loadConfig, type SecurityConfig } from './config.js';
-import { RateLimiter } from './policies/rateLimit.js';
+import { RateLimiter, RedisRateLimiter, type Limiter } from './policies/rateLimit.js';
 import { ResponseCache } from './policies/cache.js';
 import { authorize } from './policies/auth.js';
-import { Metrics } from './metrics.js';
+import { Metrics, RedisMetrics, type MetricsSink } from './metrics.js';
+import { createRedis, createRatelimit } from './store/redis.js';
 
 /** Build the request schema with config-driven size caps (message count / content length). */
 function buildChatRequestSchema(security: SecurityConfig) {
@@ -33,9 +34,9 @@ function buildChatRequestSchema(security: SecurityConfig) {
 
 /** Injectable overrides: tests pass a mock registry, tight limiter, or custom security config. */
 export interface ServerOverrides extends Partial<GatewayDeps> {
-  rateLimiter?: RateLimiter;
+  rateLimiter?: Limiter;
   security?: SecurityConfig;
-  metrics?: Metrics;
+  metrics?: MetricsSink;
 }
 
 /** The API key presented by the caller, if any (explicit header preferred over bearer token). */
@@ -67,23 +68,32 @@ export function createServer(overrides?: ServerOverrides): Hono {
   const security = overrides?.security ?? config.security;
   const chatRequestSchema = buildChatRequestSchema(security);
 
+  // A shared Redis backend (if configured) makes the cache, rate limiter, and
+  // metrics global + durable across serverless instances; otherwise each falls
+  // back to in-process state. Overrides always win (tests inject their own).
+  const redis = createRedis();
+
   const deps: GatewayDeps = {
     providers: overrides?.providers ?? buildDefaultRegistry(),
     defaultProvider: overrides?.defaultProvider ?? config.defaultProvider,
     retry: overrides?.retry ?? { ...config.retry },
-    cache: overrides?.cache ?? new ResponseCache(config.cache),
+    cache: overrides?.cache ?? new ResponseCache(config.cache, redis),
     fallbackModels: overrides?.fallbackModels ?? config.fallbackModels,
   };
-  const rateLimiter = overrides?.rateLimiter ?? new RateLimiter(config.rateLimit);
-  const metrics = overrides?.metrics ?? new Metrics();
+  const rateLimiter =
+    overrides?.rateLimiter ??
+    (redis
+      ? new RedisRateLimiter(createRatelimit(redis, config.rateLimit.capacity, config.rateLimit.refillPerSecond))
+      : new RateLimiter(config.rateLimit));
+  const metrics = overrides?.metrics ?? (redis ? new RedisMetrics(redis) : new Metrics());
   const primaryOf = (provider?: string) => provider ?? deps.defaultProvider;
 
   const app = new Hono();
 
   app.get('/health', (c) => c.json({ ok: true }));
 
-  // Live counters for the dashboard (per-instance; see README "Design decisions").
-  app.get('/stats', (c) => c.json(metrics.snapshot()));
+  // Live counters for the dashboard. Backend is in-memory or Redis (see config).
+  app.get('/stats', async (c) => c.json(await metrics.snapshot()));
 
   app.post('/v1/chat', async (c) => {
     // 1. Reject oversized bodies up front (cheap, before reading/parsing).
@@ -99,7 +109,7 @@ export function createServer(overrides?: ServerOverrides): Hono {
     const key = presentedKey(c);
     const auth = authorize(key, security.apiKeys);
     const bucket = auth.keyed ? `key:${key}` : `ip:${clientIp(c)}`;
-    const limit = rateLimiter.check(bucket);
+    const limit = await rateLimiter.check(bucket);
     if (!limit.allowed) {
       metrics.reject('rate_limited');
       c.header('Retry-After', String(Math.ceil(limit.retryAfterMs / 1000)));
