@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { RateLimiter } from '../src/policies/rateLimit';
+import { RateLimiter } from '../src/policies/rateLimit.js';
 
 /**
  * Why these matter: the token bucket IS the gateway's admission control. If it

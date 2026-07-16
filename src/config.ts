@@ -1,4 +1,4 @@
-import type { ProviderName } from './types';
+import type { ProviderName } from './types.js';
 
 export interface Config {
   port: number;

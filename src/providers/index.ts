@@ -1,7 +1,7 @@
 import type { LanguageModel } from 'ai';
-import type { ProviderName } from '../types';
-import { createBedrockProvider } from './bedrock';
-import { createOpenAIProvider } from './openai';
+import type { ProviderName } from '../types.js';
+import { createBedrockProvider } from './bedrock.js';
+import { createOpenAIProvider } from './openai.js';
 
 /**
  * One interface every provider hides behind. The gateway only ever sees this —

@@ -1,5 +1,5 @@
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
-import type { Provider } from './index';
+import type { Provider } from './index.js';
 
 /**
  * Primary provider. Credentials come from the standard AWS env vars

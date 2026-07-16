@@ -10,11 +10,12 @@ abstraction, [`@ai-sdk/amazon-bedrock`](https://www.npmjs.com/package/@ai-sdk/am
 (primary) and [`@ai-sdk/openai`](https://www.npmjs.com/package/@ai-sdk/openai) (failover) as
 providers, and [Hono](https://hono.dev) for the HTTP layer.
 
-> **Status:** Day 2 — policies. Unified `POST /v1/chat` routes to both providers behind one
-> interface, now wrapped in three production policies: per-key **rate limiting**, **retry with
-> exponential backoff + cross-provider failover**, and an **LRU response cache**. Each is unit
-> tested, plus HTTP-level integration tests, all running without live keys. Streaming,
-> benchmarks, and deploy land next.
+> **Status:** feature-complete. Unified `POST /v1/chat` routes to both providers behind one
+> interface, wrapped in three production policies — per-key **rate limiting**, **retry with
+> exponential backoff + cross-provider failover**, and an **LRU response cache** — plus **SSE
+> token streaming with client-driven cancellation**. 26 tests (unit + HTTP integration) run
+> without live keys; a benchmark harness measures the cache and failover paths. Deploy config
+> for Vercel is included.
 
 ## Why this exists
 
@@ -59,6 +60,29 @@ Non-streaming chat completion.
 
 `provider`/`model` reflect who *actually* served the response, so after a failover they name the
 secondary. A `429` (with a `Retry-After` header) means the caller's rate-limit bucket is empty.
+
+Send an API key via `x-api-key` (or a `Bearer` token) to get a per-key rate-limit bucket;
+otherwise all callers share the `anonymous` bucket.
+
+#### Streaming
+
+Add `"stream": true` to get an SSE token stream instead of a single JSON body. Events are
+`delta` (a token chunk) then a final `done` (with `provider`/`model`/`cached`/`usage`):
+
+```
+event: delta
+data: {"type":"delta","text":"Hel"}
+
+event: delta
+data: {"type":"delta","text":"lo"}
+
+event: done
+data: {"type":"done","provider":"bedrock","model":"...","cached":false,"usage":{...}}
+```
+
+If the client disconnects, the gateway aborts the upstream provider call rather than letting it
+run to completion — the RTSS cancellation-token bridge. (Streaming serves the primary provider;
+retry/failover apply to the non-streaming path.)
 
 ### `GET /health`
 
@@ -114,8 +138,34 @@ npm run dev
 
 ## Benchmarks
 
-The cache and failover paths now exist; real measured numbers land in Day 3 alongside the
-streaming work and a small bench harness.
+Measured with `npm run bench`. **Honesty note:** these run without live provider keys, against
+a mock backend with a fixed injected latency (120 ms). So the numbers are real measurements of
+*the gateway itself* — cache-hit vs. cache-miss overhead and failover behavior — not of any real
+model. Re-run against live Bedrock/OpenAI after deploy for end-to-end provider latency.
 
-- Cache hit vs. miss (p50 / p99): `TODO(metric)`
-- Demonstrated Bedrock → OpenAI failover: `TODO(metric)`
+Simulated 120 ms backend, 200 iterations:
+
+| Path | p50 | p99 | mean |
+|---|---|---|---|
+| cache **miss** (full backend round-trip) | 120.78 ms | 121.69 ms | 120.93 ms |
+| cache **hit** (in-process hash + LRU lookup) | 0.003 ms | 0.012 ms | 0.004 ms |
+
+- A miss costs the full backend round-trip; a hit avoids the provider call entirely and is
+  served in-process at sub-millisecond p99.
+- **Failover demo:** with the primary forced down, the request failed over and was **served by
+  `openai` in 413 ms** (two failed primary attempts × 120 ms + 50 ms backoff + one 120 ms
+  secondary call).
+
+## Deploy (Vercel)
+
+`api/index.ts` wraps the Hono app in Vercel's serverless adapter (`hono/vercel`) and
+`vercel.json` rewrites all routes to it. To ship it under your own account:
+
+```bash
+npm i -g vercel
+vercel                 # link + deploy a preview
+# set env vars (AWS_*, OPENAI_API_KEY, *_FALLBACK_MODEL, policy knobs) in the dashboard
+vercel --prod          # deploy production, capture the live URL
+```
+
+- Live URL: `TODO(url)` — filled in after the first production deploy.

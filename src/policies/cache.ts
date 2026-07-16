@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ChatRequest, ChatResponse, ProviderName } from '../types';
+import type { ChatRequest, ChatResponse, ProviderName } from '../types.js';
 
 /**
  * Response cache keyed on request identity, with LRU eviction and optional TTL.

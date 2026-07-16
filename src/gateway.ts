@@ -1,8 +1,8 @@
 import { generateText } from 'ai';
-import type { ChatRequest, ChatResponse, ProviderName } from './types';
-import type { ProviderRegistry } from './providers';
-import { cacheKey, type ResponseCache } from './policies/cache';
-import { withRetryAndFailover, type RetryOptions } from './policies/retry';
+import type { ChatRequest, ChatResponse, ProviderName } from './types.js';
+import type { ProviderRegistry } from './providers/index.js';
+import { cacheKey, type ResponseCache } from './policies/cache.js';
+import { withRetryAndFailover, type RetryOptions } from './policies/retry.js';
 
 /** Everything the gateway core needs, injected so it stays testable without live keys. */
 export interface GatewayDeps {
