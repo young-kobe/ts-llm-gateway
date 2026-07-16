@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { ResponseCache, cacheKey } from '../src/policies/cache';
-import type { ChatRequest, ChatResponse } from '../src/types';
+import { ResponseCache, cacheKey } from '../src/policies/cache.js';
+import type { ChatRequest, ChatResponse } from '../src/types.js';
 
 function req(overrides: Partial<ChatRequest> = {}): ChatRequest {
   return {

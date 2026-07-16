@@ -13,10 +13,10 @@
 import { performance } from 'node:perf_hooks';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
-import { handleChat, type GatewayDeps } from '../src/gateway';
-import { ResponseCache } from '../src/policies/cache';
-import type { ChatRequest } from '../src/types';
-import type { Provider, ProviderRegistry } from '../src/providers';
+import { handleChat, type GatewayDeps } from '../src/gateway.js';
+import { ResponseCache } from '../src/policies/cache.js';
+import type { ChatRequest } from '../src/types.js';
+import type { Provider, ProviderRegistry } from '../src/providers/index.js';
 
 const BACKEND_LATENCY_MS = Number(process.env.BACKEND_LATENCY_MS ?? 120);
 const ITERATIONS = Number(process.env.BENCH_ITERATIONS ?? 200);

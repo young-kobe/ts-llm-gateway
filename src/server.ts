@@ -3,12 +3,12 @@ import type { Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import type { ModelMessage } from 'ai';
-import { handleChat, UnknownProviderError, type GatewayDeps } from './gateway';
-import { streamChat } from './stream';
-import { buildDefaultRegistry } from './providers';
-import { loadConfig } from './config';
-import { RateLimiter } from './policies/rateLimit';
-import { ResponseCache } from './policies/cache';
+import { handleChat, UnknownProviderError, type GatewayDeps } from './gateway.js';
+import { streamChat } from './stream.js';
+import { buildDefaultRegistry } from './providers/index.js';
+import { loadConfig } from './config.js';
+import { RateLimiter } from './policies/rateLimit.js';
+import { ResponseCache } from './policies/cache.js';
 
 // Minimal message shape for the skeleton: plain-text turns. Tool/multi-part
 // content is intentionally out of scope until it's actually needed.

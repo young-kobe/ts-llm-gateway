@@ -1,7 +1,7 @@
 import { streamText } from 'ai';
-import type { ChatRequest, ChatResponse, ProviderName } from './types';
-import type { GatewayDeps } from './gateway';
-import { cacheKey } from './policies/cache';
+import type { ChatRequest, ChatResponse, ProviderName } from './types.js';
+import type { GatewayDeps } from './gateway.js';
+import { cacheKey } from './policies/cache.js';
 
 /** Events emitted over SSE for a streaming completion. */
 export type StreamEvent =

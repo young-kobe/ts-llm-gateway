@@ -1,5 +1,5 @@
 import { createOpenAI } from '@ai-sdk/openai';
-import type { Provider } from './index';
+import type { Provider } from './index.js';
 
 /**
  * Failover provider. Reads `OPENAI_API_KEY` from the environment. No network

@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3, LanguageModelV3StreamPart } from '@ai-sdk/provider';
-import { streamChat } from '../src/stream';
-import { createServer } from '../src/server';
-import { ResponseCache } from '../src/policies/cache';
-import type { GatewayDeps } from '../src/gateway';
-import type { ChatRequest } from '../src/types';
-import type { Provider, ProviderRegistry } from '../src/providers';
+import { streamChat } from '../src/stream.js';
+import { createServer } from '../src/server.js';
+import { ResponseCache } from '../src/policies/cache.js';
+import type { GatewayDeps } from '../src/gateway.js';
+import type { ChatRequest } from '../src/types.js';
+import type { Provider, ProviderRegistry } from '../src/providers/index.js';
 
 const V3_USAGE = {
   inputTokens: { total: 3, noCache: 3, cacheRead: undefined, cacheWrite: undefined },
@@ -82,7 +82,7 @@ const REQ: ChatRequest = {
   messages: [{ role: 'user', content: 'hi' }],
 };
 
-async function collect(gen: AsyncGenerator<import('../src/stream').StreamEvent>) {
+async function collect(gen: AsyncGenerator<import('../src/stream.js').StreamEvent>) {
   const events = [];
   for await (const event of gen) events.push(event);
   return events;

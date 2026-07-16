@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
-import { createServer } from '../src/server';
-import { RateLimiter } from '../src/policies/rateLimit';
-import type { Provider, ProviderRegistry } from '../src/providers';
-import type { ProviderName } from '../src/types';
+import { createServer } from '../src/server.js';
+import { RateLimiter } from '../src/policies/rateLimit.js';
+import type { Provider, ProviderRegistry } from '../src/providers/index.js';
+import type { ProviderName } from '../src/types.js';
 
 /** A mock model that always returns fixed text and counts how often it's invoked. */
 function passingModel(text: string, counter?: { calls: number }): LanguageModelV3 {

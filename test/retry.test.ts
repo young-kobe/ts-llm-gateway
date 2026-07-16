@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { withRetryAndFailover, backoffDelay, type RetryOptions } from '../src/policies/retry';
+import { withRetryAndFailover, backoffDelay, type RetryOptions } from '../src/policies/retry.js';
 
 /** Base options with an instrumented sleep so tests assert the backoff schedule with no real waiting. */
 function opts(overrides: Partial<RetryOptions> = {}): { options: RetryOptions; sleeps: number[] } {
